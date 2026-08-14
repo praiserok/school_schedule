@@ -1,0 +1,56 @@
+{% extends "scheduler/base.html" %}
+{% block title %}Розклади дзвінків{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h4 class="mb-0">Дзвінки <span class="badge bg-secondary fs-6 fw-normal">{{ bells|length }}</span></h4>
+  <a href="{% url 'scheduler:bell_add' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-plus-lg me-1"></i>Додати
+  </a>
+</div>
+
+{% if bells %}
+  {% for bell in bells %}
+  <div class="table-card mb-3">
+    <div class="d-flex align-items-center px-3 py-2 border-bottom">
+      <strong class="me-auto">{{ bell.name }}</strong>
+      <a href="{% url 'scheduler:bell_edit' bell.pk %}" class="btn btn-sm btn-outline-secondary me-1">
+        <i class="bi bi-pencil"></i>
+      </a>
+      <a href="{% url 'scheduler:bell_delete' bell.pk %}" class="btn btn-sm btn-outline-danger">
+        <i class="bi bi-trash"></i>
+      </a>
+    </div>
+    {% if bell.periods.all %}
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr class="table-light">
+          <th style="width:60px;">#</th>
+          <th>Початок</th>
+          <th>Кінець</th>
+          <th class="text-muted">Тривалість</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in bell.periods.all %}
+        <tr>
+          <td class="fw-semibold text-muted">{{ p.number }}</td>
+          <td>{{ p.start_time|time:"H:i" }}</td>
+          <td>{{ p.end_time|time:"H:i" }}</td>
+          <td class="text-muted small">{{ p.duration_minutes }} хв</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="p-3 text-muted small">Уроків ще не додано.</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+{% else %}
+<div class="table-card p-4 text-center text-muted">
+  <i class="bi bi-alarm display-6 d-block mb-2"></i>
+  Розкладів дзвінків ще немає. <a href="{% url 'scheduler:bell_add' %}">Додати</a>.
+</div>
+{% endif %}
+{% endblock %}

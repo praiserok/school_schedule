@@ -1,0 +1,243 @@
+{% extends "scheduler/base.html" %}
+{% load scheduler_tags %}
+{% block title %}{{ schedule.name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap"
+     style="position:sticky;top:0;z-index:100;background:#f8f9fa;padding:.5rem .25rem;margin:-.5rem -.25rem .75rem;box-shadow:0 2px 6px rgba(0,0,0,.08);">
+  <a href="{% url 'scheduler:schedule_list' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h4 class="mb-0">{{ schedule.name }}</h4>
+  {% if schedule.is_active %}<span class="badge bg-success">Активний</span>{% endif %}
+
+  <div class="btn-group btn-group-sm me-auto" role="group" aria-label="Тиждень">
+    <a href="?week=0" class="btn {% if week == 0 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень А</a>
+    <a href="?week=1" class="btn {% if week == 1 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень Б</a>
+  </div>
+
+  <button id="edit-toggle" class="btn btn-outline-warning btn-sm">
+    <i class="bi bi-pencil-square me-1"></i>Редагувати
+  </button>
+
+  <div class="dropdown">
+    <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+      <i class="bi bi-person-badge me-1"></i>Розклад вчителя
+    </button>
+    <ul class="dropdown-menu dropdown-menu-end" style="max-height:320px;overflow-y:auto;">
+      {% for t in all_teachers %}
+      <li>
+        <a class="dropdown-item" href="{% url 'scheduler:teacher_schedule' schedule.pk t.pk %}">{{ t }}</a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <form method="post" action="{% url 'scheduler:schedule_generate' schedule.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-primary btn-sm"
+            onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-1\'></span>Генерую…'; this.form.submit();">
+      <i class="bi bi-lightning-charge me-1"></i>Згенерувати розклад
+    </button>
+  </form>
+</div>
+
+{# Швидка навігація по класах #}
+{% if classes %}
+<div style="position:sticky;top:44px;z-index:99;background:#f8f9fa;padding:.3rem .25rem .4rem;margin:0 -.25rem .75rem;box-shadow:0 2px 4px rgba(0,0,0,.05);">
+  <div class="d-flex flex-wrap gap-1">
+    {% for cls in classes %}
+    <a href="#cls-{{ cls.pk }}" class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size:.8rem;">{{ cls }}</a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# Підказка в режимі редагування #}
+<div id="edit-hint" class="alert alert-warning py-2 d-none">
+  <i class="bi bi-info-circle me-1"></i>
+  <strong>Режим редагування:</strong> клікніть на урок щоб виділити, потім клікніть на іншу комірку того ж класу — переміщення або обмін.
+  <span id="selected-info" class="ms-2 fw-semibold"></span>
+</div>
+
+{# Toast для помилок #}
+<div id="err-toast" class="toast align-items-center text-bg-danger border-0 position-fixed bottom-0 end-0 m-3" role="alert" style="z-index:9999;">
+  <div class="d-flex">
+    <div class="toast-body" id="err-toast-body"></div>
+    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+  </div>
+</div>
+
+{% if not classes %}
+<div class="alert alert-info">Розклад порожній — уроків ще немає.</div>
+{% else %}
+
+{% for cls in classes %}
+{% with cls_grid=grid|get_item:cls.pk %}
+<div class="mb-4" id="cls-{{ cls.pk }}">
+  <h6 class="text-muted fw-semibold mb-2">Клас {{ cls }}</h6>
+  <div class="table-card" style="overflow-x:auto;">
+    <table class="table table-bordered table-sm mb-0" style="min-width:600px;">
+      <thead>
+        <tr class="table-light">
+          <th style="width:36px;">#</th>
+          {% for day in days %}<th>{{ day }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in periods %}
+        {% with bp=bell_times|get_item:p %}
+        <tr>
+          <td class="text-center text-muted" style="white-space:nowrap;">
+            <div class="fw-semibold">{{ p|add:1 }}</div>
+            {% if bp %}
+              <div style="font-size:.7rem;">{{ bp.start_time|time:"H:i" }}</div>
+              <div style="font-size:.7rem;">{{ bp.end_time|time:"H:i" }}</div>
+            {% endif %}
+          </td>
+          {% for d in schedule.days_per_week|make_range %}
+          {% with lesson=cls_grid|get_item:d|get_item:p %}
+          <td class="sch-cell"
+              data-cls="{{ cls.pk }}"
+              data-day="{{ d }}"
+              data-period="{{ p }}"
+              {% if lesson %}
+                data-lid="{{ lesson.pk }}"
+                style="border-left:3px solid {{ lesson.subject.color }};background:{{ lesson.subject.color }}22;"
+              {% endif %}>
+            {% if lesson %}
+              <div class="fw-semibold" style="font-size:.82rem;">{{ lesson.subject.short_name|default:lesson.subject.name }}</div>
+              <div style="font-size:.75rem;">
+                <a href="{% url 'scheduler:teacher_schedule' schedule.pk lesson.teacher_id %}"
+                   class="text-muted text-decoration-none">{{ lesson.teacher }}</a>
+              </div>
+              {% if lesson.room %}
+                <div class="text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</div>
+              {% endif %}
+            {% endif %}
+          </td>
+          {% endwith %}
+          {% endfor %}
+        </tr>
+        {% endwith %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endwith %}
+{% endfor %}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const MOVE_URL = "{% url 'scheduler:lesson_move' schedule.pk %}";
+  const CSRF = "{{ csrf_token }}";
+
+  let editMode = false;
+  let selCell = null;   // виділена td
+  let selLid  = null;   // lesson pk
+  let selCls  = null;   // class pk
+
+  const toggleBtn  = document.getElementById('edit-toggle');
+  const hint       = document.getElementById('edit-hint');
+  const selInfo    = document.getElementById('selected-info');
+  const toastEl    = document.getElementById('err-toast');
+  const toastBody  = document.getElementById('err-toast-body');
+  const bsToast    = new bootstrap.Toast(toastEl, {delay: 5000});
+
+  // ── Режим редагування ────────────────────────────────────────────────────
+  toggleBtn.addEventListener('click', function () {
+    editMode = !editMode;
+    this.classList.toggle('btn-warning', editMode);
+    this.classList.toggle('btn-outline-warning', !editMode);
+    this.innerHTML = editMode
+      ? '<i class="bi bi-x-lg me-1"></i>Завершити'
+      : '<i class="bi bi-pencil-square me-1"></i>Редагувати';
+    hint.classList.toggle('d-none', !editMode);
+    clearSel();
+    document.querySelectorAll('.sch-cell').forEach(td => {
+      td.style.cursor = editMode ? 'pointer' : '';
+    });
+  });
+
+  // ── Кліки по комірках ────────────────────────────────────────────────────
+  document.querySelectorAll('.sch-cell').forEach(td => {
+    td.addEventListener('click', function () {
+      if (!editMode) return;
+
+      const lid = this.dataset.lid || null;
+      const cls = this.dataset.cls;
+      const day = this.dataset.day;
+      const per = this.dataset.period;
+
+      // Повторний клік по виділеній → скасувати
+      if (selCell === this) { clearSel(); return; }
+
+      if (!selCell) {
+        // Перший клік — виділяємо (тільки якщо є урок)
+        if (!lid) return;
+        selCell = this;
+        selLid  = lid;
+        selCls  = cls;
+        this.style.outline = '3px solid #f0ad4e';
+        this.style.outlineOffset = '-3px';
+        selInfo.textContent = 'Урок виділено — клікніть на цільову комірку';
+      } else {
+        // Другий клік — переміщення або обмін (тільки в тому ж класі)
+        if (cls !== selCls) {
+          showError('Можна переміщати тільки в межах одного класу');
+          return;
+        }
+        doMove(selLid, +day, +per);
+      }
+    });
+  });
+
+  // Клік поза комірками — скасувати виділення
+  document.addEventListener('click', function (e) {
+    if (editMode && selCell && !e.target.closest('.sch-cell')) clearSel();
+  });
+
+  // Esc — скасувати
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') clearSel();
+  });
+
+  // ── Логіка переміщення ───────────────────────────────────────────────────
+  function doMove(lid, newDay, newPeriod) {
+    fetch(MOVE_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+      body: JSON.stringify({lesson_id: lid, new_day: newDay, new_period: newPeriod}),
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        location.reload();
+      } else {
+        showError(data.errors.join('\n'));
+        clearSel();
+      }
+    })
+    .catch(() => { showError('Помилка зʼєднання'); clearSel(); });
+  }
+
+  function clearSel() {
+    if (selCell) {
+      selCell.style.outline = '';
+      selCell.style.outlineOffset = '';
+    }
+    selCell = selLid = selCls = null;
+    selInfo.textContent = '';
+  }
+
+  function showError(msg) {
+    toastBody.textContent = msg;
+    bsToast.show();
+  }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "scheduler/base.html" %}
+{% block title %}Кабінети{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h4 class="mb-0">Кабінети <span class="badge bg-secondary fs-6 fw-normal">{{ rooms|length }}</span></h4>
+  <a href="{% url 'scheduler:room_add' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-plus-lg me-1"></i>Додати
+  </a>
+</div>
+
+<div class="table-card">
+  {% if rooms %}
+  <table class="table table-hover align-middle mb-0">
+    <thead>
+      <tr>
+        <th>Назва / номер</th>
+        <th>Предмет (спеціалізація)</th>
+        <th>Місткість</th>
+        <th style="width:130px;"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rooms %}
+      <tr>
+        <td><strong>{{ r.name }}</strong></td>
+        <td>
+          {% if r.subject %}
+            <span class="badge bg-warning text-dark">{{ r.subject }}</span>
+          {% else %}
+            <span class="text-muted">Загальний</span>
+          {% endif %}
+        </td>
+        <td>{{ r.capacity }}</td>
+        <td class="text-end">
+          {% if active_schedule %}
+          <a href="{% url 'scheduler:room_schedule' active_schedule.pk r.pk %}" class="btn btn-sm btn-outline-primary me-1" title="Завантаженість">
+            <i class="bi bi-calendar3"></i>
+          </a>
+          {% endif %}
+          <a href="{% url 'scheduler:room_edit' r.pk %}" class="btn btn-sm btn-outline-secondary me-1">
+            <i class="bi bi-pencil"></i>
+          </a>
+          <a href="{% url 'scheduler:room_delete' r.pk %}" class="btn btn-sm btn-outline-danger">
+            <i class="bi bi-trash"></i>
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="p-4 text-center text-muted">
+    <i class="bi bi-door-open display-6 d-block mb-2"></i>
+    Кабінетів ще немає. <a href="{% url 'scheduler:room_add' %}">Додайте перший</a>.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends "scheduler/base.html" %}
+{% block title %}Класи{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h4 class="mb-0">Класи <span class="badge bg-secondary fs-6 fw-normal">{{ classes|length }}</span></h4>
+  <a href="{% url 'scheduler:class_add' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-plus-lg me-1"></i>Додати
+  </a>
+</div>
+
+<div class="table-card">
+  {% if classes %}
+  <table class="table table-hover align-middle mb-0">
+    <thead>
+      <tr>
+        <th>Клас</th>
+        <th>Основний кабінет</th>
+        <th style="width:130px;"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in classes %}
+      <tr>
+        <td><strong>{{ c }}</strong></td>
+        <td>{{ c.home_room|default:"—" }}</td>
+        <td class="text-end">
+          <a href="{% url 'scheduler:class_load' c.pk %}" class="btn btn-sm btn-outline-primary me-1" title="Навантаження">
+            <i class="bi bi-journal-text"></i>
+          </a>
+          <a href="{% url 'scheduler:class_edit' c.pk %}" class="btn btn-sm btn-outline-secondary me-1">
+            <i class="bi bi-pencil"></i>
+          </a>
+          <a href="{% url 'scheduler:class_delete' c.pk %}" class="btn btn-sm btn-outline-danger">
+            <i class="bi bi-trash"></i>
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="p-4 text-center text-muted">
+    <i class="bi bi-people display-6 d-block mb-2"></i>
+    Класів ще немає. <a href="{% url 'scheduler:class_add' %}">Додайте перший</a>.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

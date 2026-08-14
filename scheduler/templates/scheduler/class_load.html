@@ -1,0 +1,129 @@
+{% extends "scheduler/base.html" %}
+{% block title %}Навантаження — {{ cls }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="{% url 'scheduler:class_list' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h4 class="mb-0">{{ cls }} клас</h4>
+  <span class="text-muted fs-6">— навантаження</span>
+  <span class="ms-2 badge bg-primary fs-6 fw-normal" id="slot-badge">{{ slot_hours }} слот/тиж</span>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  {{ formset.management_form }}
+
+  <div class="table-card mb-3">
+    <table class="table table-sm align-middle mb-0" id="load-table">
+      <thead>
+        <tr class="table-light">
+          <th>Предмет</th>
+          <th>Вчитель</th>
+          <th style="width:90px;" title="Годин на тиждень">Год./тиж.</th>
+          <th style="width:80px;" title="Група (порожньо = весь клас)">Група</th>
+          <th style="width:40px;"></th>
+        </tr>
+      </thead>
+      <tbody id="formset-body">
+        {% for form in formset %}
+        <tr class="formset-row{% if form.instance.pk %} existing{% endif %}">
+          <td>
+            {{ form.id }}
+            {{ form.subject }}
+            {% if form.subject.errors %}<div class="text-danger small">{{ form.subject.errors.0 }}</div>{% endif %}
+          </td>
+          <td>
+            {{ form.teacher }}
+            {% if form.teacher.errors %}<div class="text-danger small">{{ form.teacher.errors.0 }}</div>{% endif %}
+          </td>
+          <td>
+            {{ form.hours_per_week }}
+            {% if form.hours_per_week.errors %}<div class="text-danger small">{{ form.hours_per_week.errors.0 }}</div>{% endif %}
+          </td>
+          <td>
+            {{ form.group }}
+            {% if form.group.errors %}<div class="text-danger small">{{ form.group.errors.0 }}</div>{% endif %}
+          </td>
+          <td class="text-center">
+            {% if form.instance.pk %}
+              <label class="d-flex align-items-center justify-content-center" title="Видалити">
+                {{ form.DELETE }}
+                <i class="bi bi-trash text-danger" style="pointer-events:none;"></i>
+              </label>
+            {% else %}
+              <button type="button" class="btn btn-sm btn-outline-secondary remove-row" title="Прибрати">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="d-flex gap-2">
+    <button type="button" id="add-row" class="btn btn-outline-primary btn-sm">
+      <i class="bi bi-plus-lg me-1"></i>Додати рядок
+    </button>
+    <button type="submit" class="btn btn-primary btn-sm">
+      <i class="bi bi-check-lg me-1"></i>Зберегти
+    </button>
+    <a href="{% url 'scheduler:class_list' %}" class="btn btn-outline-secondary btn-sm">Скасувати</a>
+  </div>
+</form>
+
+{# Прихований шаблон нового рядка #}
+<table style="display:none;">
+  <tbody>
+    <tr id="empty-row" class="formset-row">
+      {{ formset.empty_form.id }}
+      <td>{{ formset.empty_form.subject }}</td>
+      <td>{{ formset.empty_form.teacher }}</td>
+      <td>{{ formset.empty_form.hours_per_week }}</td>
+      <td>{{ formset.empty_form.group }}</td>
+      <td class="text-center">
+        <button type="button" class="btn btn-sm btn-outline-secondary remove-row">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const totalForms = document.getElementById('id_teachersubject_set-TOTAL_FORMS');
+  const body = document.getElementById('formset-body');
+  const emptyRow = document.getElementById('empty-row');
+
+  document.querySelectorAll('input[id$="-DELETE"]').forEach(cb => {
+    cb.style.display = 'none';
+    cb.closest('label')?.addEventListener('click', function (e) {
+      e.preventDefault();
+      cb.checked = !cb.checked;
+      this.closest('tr').style.opacity = cb.checked ? '0.35' : '1';
+    });
+  });
+
+  document.getElementById('add-row').addEventListener('click', function () {
+    const idx = parseInt(totalForms.value);
+    const html = emptyRow.innerHTML.replace(/__prefix__/g, idx);
+    const tr = document.createElement('tr');
+    tr.className = 'formset-row';
+    tr.innerHTML = html;
+    body.appendChild(tr);
+    totalForms.value = idx + 1;
+    tr.querySelector('.remove-row')?.addEventListener('click', () => tr.remove());
+  });
+
+  document.querySelectorAll('.remove-row').forEach(btn => {
+    btn.addEventListener('click', function () { this.closest('tr').remove(); });
+  });
+})();
+</script>
+{% endblock %}

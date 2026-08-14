@@ -1,0 +1,117 @@
+{% extends "scheduler/base.html" %}
+{% block title %}Вчителі{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h4 class="mb-0">Вчителі <span class="badge bg-secondary fs-6 fw-normal">{{ total_count }}</span></h4>
+  <a href="{% url 'scheduler:teacher_add' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-plus-lg me-1"></i>Додати
+  </a>
+</div>
+
+{# ── Фільтр по предметах ── #}
+<div class="table-card p-2 mb-3 d-flex flex-wrap gap-2 align-items-center">
+  <span class="text-muted small ms-1">Предмет:</span>
+  <a href="{% url 'scheduler:teacher_list' %}"
+     class="btn btn-sm {% if not subject_filter %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+    Всі
+  </a>
+  {% for s in subjects %}
+  <a href="?subject={{ s.pk }}"
+     class="btn btn-sm {% if subject_filter == s.pk|stringformat:'s' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+     style="border-left: 3px solid {{ s.color }};">
+    {{ s.short_name|default:s.name }}
+  </a>
+  {% endfor %}
+</div>
+
+{% if groups %}
+  {% for subj, teachers, subj_hours in groups %}
+
+  {# ── Заголовок групи ── #}
+  <div class="d-flex align-items-center gap-2 mt-4 mb-2">
+    {% if subj %}
+      <span class="rounded-circle d-inline-block"
+            style="width:12px;height:12px;background:{{ subj.color }};flex-shrink:0;"></span>
+      <h6 class="mb-0 fw-semibold">{{ subj.name }}</h6>
+      {% if subj.short_name %}<span class="text-muted small">({{ subj.short_name }})</span>{% endif %}
+    {% else %}
+      <i class="bi bi-question-circle text-muted"></i>
+      <h6 class="mb-0 fw-semibold text-muted">Без навантаження</h6>
+    {% endif %}
+    <span class="badge bg-light text-dark border">{{ teachers|length }} вч.</span>
+    {% if subj_hours %}<span class="badge bg-primary bg-opacity-10 text-primary border border-primary-subtle">{{ subj_hours }} год/тиж</span>{% endif %}
+  </div>
+
+  <div class="table-card mb-1">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Прізвище Імʼя</th>
+          <th>Дні</th>
+          <th>Предмети та навантаження</th>
+          <th style="width:50px;" class="text-end text-muted">год/тиж</th>
+          <th style="width:110px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in teachers %}
+        <tr>
+          <td>
+            <strong>{{ t }}</strong>
+            <div class="text-muted small">макс. {{ t.max_lessons_per_day }} ур/день</div>
+          </td>
+          <td style="white-space:nowrap;">
+            {% for label, bit in t.days_display %}
+              <span class="badge {% if bit %}bg-success{% else %}bg-light text-muted{% endif %} me-1">{{ label }}</span>
+            {% endfor %}
+          </td>
+          <td>
+            {% regroup t.teachersubject_set.all by subject as subj_list %}
+            {% for subj_group in subj_list %}
+              {% with s=subj_group.grouper %}
+              <span class="d-inline-flex align-items-center gap-1 me-2 mb-1">
+                <span class="d-inline-block rounded-circle"
+                      style="width:8px;height:8px;background:{{ s.color }};flex-shrink:0;"></span>
+                <span style="font-size:.82rem;">{{ s.short_name|default:s.name }}</span>
+                <span class="badge bg-light text-dark border" style="font-size:.72rem;">
+                  {% for ts in subj_group.list %}{{ ts.hours_per_week }}{% if not forloop.last %}+{% endif %}{% endfor %}г
+                </span>
+              </span>
+              {% endwith %}
+            {% empty %}
+              <span class="text-muted small">—</span>
+            {% endfor %}
+          </td>
+          <td class="text-end fw-semibold">
+            {% if t.total_hours %}{{ t.total_hours }}{% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td class="text-end">
+            <a href="{% url 'scheduler:teacher_load' t.pk %}" class="btn btn-sm btn-outline-primary me-1" title="Навантаження">
+              <i class="bi bi-table"></i>
+            </a>
+            <a href="{% url 'scheduler:teacher_edit' t.pk %}" class="btn btn-sm btn-outline-secondary me-1">
+              <i class="bi bi-pencil"></i>
+            </a>
+            <a href="{% url 'scheduler:teacher_delete' t.pk %}" class="btn btn-sm btn-outline-danger">
+              <i class="bi bi-trash"></i>
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% endfor %}
+{% else %}
+<div class="table-card p-4 text-center text-muted">
+  <i class="bi bi-person-badge display-6 d-block mb-2"></i>
+  {% if subject_filter %}
+    Вчителів з таким предметом не знайдено.
+  {% else %}
+    Вчителів ще немає. <a href="{% url 'scheduler:teacher_add' %}">Додайте першого</a>.
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

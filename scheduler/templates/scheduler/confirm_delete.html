@@ -1,0 +1,24 @@
+{% extends "scheduler/base.html" %}
+{% block title %}Видалити{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-3 gap-2">
+  <a href="{% url back_url %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h4 class="mb-0">Підтвердити видалення</h4>
+</div>
+
+<div class="table-card p-4" style="max-width:480px;">
+  <p class="mb-4">Ви впевнені, що хочете видалити <strong>{{ obj }}</strong>?</p>
+  <form method="post">
+    {% csrf_token %}
+    <div class="d-flex gap-2">
+      <button type="submit" class="btn btn-danger">
+        <i class="bi bi-trash me-1"></i>Так, видалити
+      </button>
+      <a href="{% url back_url %}" class="btn btn-outline-secondary">Скасувати</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

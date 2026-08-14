@@ -1,3 +1,737 @@
-from django.shortcuts import render
+from django.shortcuts import render, get_object_or_404, redirect
+from django.contrib import messages
+from django.views.decorators.http import require_POST
+from django.db import models
+from django.forms import inlineformset_factory
 
-# Create your views here.
+from .models import Teacher, Subject, Room, SchoolClass, TeacherSubject, Schedule, Lesson, BellSchedule, BellPeriod
+from .forms import (
+    TeacherForm, SubjectForm, RoomForm, SchoolClassForm,
+    TeacherSubjectForm, TeacherLoadRowForm, ClassLoadRowForm, ScheduleForm,
+    BellScheduleForm, BellPeriodForm, DAYS_LABELS, DAYS_FULL,
+)
+
+
+# ─── Dashboard ───────────────────────────────────────────────────────────────
+
+def dashboard(request):
+    active_schedule = Schedule.objects.filter(is_active=True).first()
+
+    from itertools import groupby
+    teacher_qs = list(
+        Teacher.objects.prefetch_related(
+            models.Prefetch(
+                'teachersubject_set',
+                queryset=TeacherSubject.objects.select_related('subject').order_by('subject__name'),
+            )
+        ).order_by('last_name')
+    )
+    for t in teacher_qs:
+        t.total_hours = sum(ts.hours_per_week for ts in t.teachersubject_set.all())
+
+    def first_subject(t):
+        ts = t.teachersubject_set.all()
+        return ts[0].subject if ts else None
+
+    teacher_qs.sort(key=lambda t: (
+        first_subject(t).name if first_subject(t) else '\xff',
+        t.last_name,
+    ))
+
+    teacher_groups = [
+        (subj, list(items))
+        for subj, items in groupby(teacher_qs, key=first_subject)
+    ]
+
+    return render(request, 'scheduler/dashboard.html', {
+        'counts': {
+            'teachers': Teacher.objects.count(),
+            'subjects': Subject.objects.count(),
+            'rooms': Room.objects.count(),
+            'classes': SchoolClass.objects.count(),
+            'assignments': TeacherSubject.objects.count(),
+        },
+        'active_schedule': active_schedule,
+        'lesson_count': active_schedule.lessons.count() if active_schedule else 0,
+        'teacher_groups': teacher_groups,
+    })
+
+
+# ─── Help ─────────────────────────────────────────────────────────────────────
+
+def help_page(request):
+    return render(request, 'scheduler/help.html')
+
+
+# ─── Новий навчальний рік ─────────────────────────────────────────────────────
+
+def new_year(request):
+    """
+    GET  → прев'ю змін (що буде видалено / зсунуто)
+    POST action=reset  → повне очищення бази (залишає Teachers/Subjects/Rooms)
+    POST action=shift  → зсув класів на 1 рік + нові 1-ші класи
+    POST action=wipe   → видалити абсолютно все (тестові дані)
+    """
+    from .models import Lesson, Schedule, TeacherSubject, SchoolClass
+
+    classes_by_grade = {}
+    for cls in SchoolClass.objects.order_by('grade', 'letter'):
+        classes_by_grade.setdefault(cls.grade, []).append(cls)
+
+    max_grade = max(classes_by_grade.keys(), default=0)
+
+    stats = {
+        'lessons':     Lesson.objects.count(),
+        'schedules':   Schedule.objects.count(),
+        'assignments': TeacherSubject.objects.count(),
+        'classes':     SchoolClass.objects.count(),
+        'teachers':    Teacher.objects.count(),
+        'subjects':    Subject.objects.count(),
+        'rooms':       Room.objects.count(),
+    }
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+
+        if action == 'wipe':
+            # Видалити абсолютно всі дані
+            from .models import BellSchedule
+            Lesson.objects.all().delete()
+            Schedule.objects.all().delete()
+            TeacherSubject.objects.all().delete()
+            SchoolClass.objects.all().delete()
+            Teacher.objects.all().delete()
+            Subject.objects.all().delete()
+            Room.objects.all().delete()
+            BellSchedule.objects.all().delete()
+            messages.success(request, 'Базу повністю очищено.')
+            return redirect('scheduler:new_year')
+
+        if action == 'reset':
+            # Очистити розклади й навантаження, залишити Teachers/Subjects/Rooms/Classes
+            Lesson.objects.all().delete()
+            Schedule.objects.all().delete()
+            TeacherSubject.objects.all().delete()
+            messages.success(request, 'Розклади та навантаження очищено.')
+            return redirect('scheduler:new_year')
+
+        if action == 'shift':
+            # Зсунути паралелі на 1 рік
+            new_letters = [
+                l.strip().upper()
+                for l in request.POST.get('new_grade1_letters', '').split(',')
+                if l.strip()
+            ]
+            # Спочатку видаляємо випускний клас
+            SchoolClass.objects.filter(grade=max_grade).delete()
+            # Зсуваємо від старшого до молодшого, щоб не порушити unique_together
+            for cls in SchoolClass.objects.order_by('-grade'):
+                cls.grade += 1
+                cls.save()
+            # Очищаємо навантаження і розклади (вони більше не відповідають класам)
+            Lesson.objects.all().delete()
+            Schedule.objects.all().delete()
+            TeacherSubject.objects.all().delete()
+            # Додаємо нові 1-ші класи
+            for letter in new_letters:
+                SchoolClass.objects.get_or_create(grade=1, letter=letter)
+            messages.success(
+                request,
+                f'Класи зсунуто. Видалено {max_grade}-ту паралель. '
+                f'Додано нових 1-х класів: {len(new_letters)}.'
+            )
+            return redirect('scheduler:new_year')
+
+    return render(request, 'scheduler/new_year.html', {
+        'stats': stats,
+        'classes_by_grade': dict(sorted(classes_by_grade.items())),
+        'max_grade': max_grade,
+    })
+
+
+# ─── Teachers ────────────────────────────────────────────────────────────────
+
+def teacher_list(request):
+    subject_filter = request.GET.get('subject', '')
+    qs = Teacher.objects.prefetch_related(
+        models.Prefetch(
+            'teachersubject_set',
+            queryset=TeacherSubject.objects.select_related('subject').order_by('subject__name'),
+        )
+    )
+    if subject_filter:
+        qs = qs.filter(teachersubject__subject_id=subject_filter).distinct()
+
+    from itertools import groupby
+    teacher_list_data = list(qs.order_by('last_name'))
+
+    for t in teacher_list_data:
+        t.total_hours = sum(ts.hours_per_week for ts in t.teachersubject_set.all())
+
+    def first_subject(t):
+        ts = t.teachersubject_set.all()
+        return ts[0].subject if ts else None
+
+    teacher_list_data.sort(key=lambda t: (
+        first_subject(t).name if first_subject(t) else '\xff',
+        t.last_name,
+    ))
+
+    groups = []
+    for subj, items in groupby(teacher_list_data, key=first_subject):
+        teachers = list(items)
+        if subj:
+            subj_hours = sum(
+                ts.hours_per_week
+                for t in teachers
+                for ts in t.teachersubject_set.all()
+                if ts.subject_id == subj.pk
+            )
+        else:
+            subj_hours = 0
+        groups.append((subj, teachers, subj_hours))
+
+    subjects = Subject.objects.order_by('name')
+    return render(request, 'scheduler/teacher_list.html', {
+        'groups': groups,
+        'subjects': subjects,
+        'subject_filter': subject_filter,
+        'total_count': len(teacher_list_data),
+    })
+
+
+def teacher_form(request, pk=None):
+    obj = get_object_or_404(Teacher, pk=pk) if pk else None
+    form = TeacherForm(request.POST or None, instance=obj)
+    if form.is_valid():
+        form.save()
+        messages.success(request, 'Збережено.')
+        return redirect('scheduler:teacher_list')
+    return render(request, 'scheduler/form.html', {
+        'form': form,
+        'title': 'Редагувати вчителя' if obj else 'Додати вчителя',
+        'back_url': 'scheduler:teacher_list',
+        'days_labels': DAYS_LABELS,
+    })
+
+
+def teacher_delete(request, pk):
+    obj = get_object_or_404(Teacher, pk=pk)
+    if request.method == 'POST':
+        if Lesson.objects.filter(teacher=obj).exists():
+            messages.error(request, 'Неможна видалити вчителя — він присутній у згенерованому розкладі.')
+            return redirect('scheduler:teacher_list')
+        obj.delete()
+        messages.success(request, 'Вчителя видалено.')
+        return redirect('scheduler:teacher_list')
+    return render(request, 'scheduler/confirm_delete.html', {
+        'obj': obj, 'back_url': 'scheduler:teacher_list',
+    })
+
+
+# ─── Subjects ────────────────────────────────────────────────────────────────
+
+def subject_list(request):
+    return render(request, 'scheduler/subject_list.html', {
+        'subjects': Subject.objects.all(),
+    })
+
+
+def subject_form(request, pk=None):
+    obj = get_object_or_404(Subject, pk=pk) if pk else None
+    form = SubjectForm(request.POST or None, instance=obj)
+    if form.is_valid():
+        form.save()
+        messages.success(request, 'Збережено.')
+        return redirect('scheduler:subject_list')
+    return render(request, 'scheduler/form.html', {
+        'form': form,
+        'title': 'Редагувати предмет' if obj else 'Додати предмет',
+        'back_url': 'scheduler:subject_list',
+    })
+
+
+def subject_delete(request, pk):
+    obj = get_object_or_404(Subject, pk=pk)
+    if request.method == 'POST':
+        obj.delete()
+        messages.success(request, 'Предмет видалено.')
+        return redirect('scheduler:subject_list')
+    return render(request, 'scheduler/confirm_delete.html', {
+        'obj': obj, 'back_url': 'scheduler:subject_list',
+    })
+
+
+# ─── Rooms ───────────────────────────────────────────────────────────────────
+
+def room_list(request):
+    active = Schedule.objects.filter(is_active=True).first()
+    return render(request, 'scheduler/room_list.html', {
+        'rooms': Room.objects.select_related('subject').all(),
+        'active_schedule': active,
+    })
+
+
+def room_form(request, pk=None):
+    obj = get_object_or_404(Room, pk=pk) if pk else None
+    form = RoomForm(request.POST or None, instance=obj)
+    if form.is_valid():
+        form.save()
+        messages.success(request, 'Збережено.')
+        return redirect('scheduler:room_list')
+    return render(request, 'scheduler/form.html', {
+        'form': form,
+        'title': 'Редагувати кабінет' if obj else 'Додати кабінет',
+        'back_url': 'scheduler:room_list',
+    })
+
+
+def room_delete(request, pk):
+    obj = get_object_or_404(Room, pk=pk)
+    if request.method == 'POST':
+        obj.delete()
+        messages.success(request, 'Кабінет видалено.')
+        return redirect('scheduler:room_list')
+    return render(request, 'scheduler/confirm_delete.html', {
+        'obj': obj, 'back_url': 'scheduler:room_list',
+    })
+
+
+# ─── Classes ─────────────────────────────────────────────────────────────────
+
+def class_list(request):
+    return render(request, 'scheduler/class_list.html', {
+        'classes': SchoolClass.objects.select_related('home_room').all(),
+    })
+
+
+def class_form(request, pk=None):
+    obj = get_object_or_404(SchoolClass, pk=pk) if pk else None
+    form = SchoolClassForm(request.POST or None, instance=obj)
+    if form.is_valid():
+        form.save()
+        messages.success(request, 'Збережено.')
+        return redirect('scheduler:class_list')
+    return render(request, 'scheduler/form.html', {
+        'form': form,
+        'title': 'Редагувати клас' if obj else 'Додати клас',
+        'back_url': 'scheduler:class_list',
+    })
+
+
+def class_delete(request, pk):
+    obj = get_object_or_404(SchoolClass, pk=pk)
+    if request.method == 'POST':
+        obj.delete()
+        messages.success(request, 'Клас видалено.')
+        return redirect('scheduler:class_list')
+    return render(request, 'scheduler/confirm_delete.html', {
+        'obj': obj, 'back_url': 'scheduler:class_list',
+    })
+
+
+from django.forms import inlineformset_factory as _ifs
+
+ClassLoadFormSet = _ifs(
+    SchoolClass, TeacherSubject,
+    form=ClassLoadRowForm,
+    fk_name='school_class',
+    extra=1,
+    can_delete=True,
+)
+
+
+def class_load(request, pk):
+    cls = get_object_or_404(SchoolClass, pk=pk)
+    if request.method == 'POST':
+        formset = ClassLoadFormSet(request.POST, instance=cls)
+        if formset.is_valid():
+            formset.save()
+            messages.success(request, 'Навантаження збережено.')
+            return redirect('scheduler:class_load', pk=cls.pk)
+    else:
+        formset = ClassLoadFormSet(instance=cls)
+
+    # Підрахунок годин на тиждень (по слотах класу, не по кількості записів)
+    all_ts = list(TeacherSubject.objects.filter(school_class=cls).order_by('subject__name', 'group'))
+    seen = set()
+    slot_hours = 0
+    for ts in all_ts:
+        key = (ts.subject_id, ts.group if ts.group else None)
+        if ts.group is None or key not in seen:
+            slot_hours += ts.hours_per_week
+        seen.add(key)
+
+    return render(request, 'scheduler/class_load.html', {
+        'cls': cls,
+        'formset': formset,
+        'slot_hours': slot_hours,
+    })
+
+
+# ─── TeacherSubject (Навантаження) ───────────────────────────────────────────
+
+def ts_list(request):
+    qs = TeacherSubject.objects.select_related('teacher', 'subject', 'school_class').all()
+    return render(request, 'scheduler/ts_list.html', {'assignments': qs})
+
+
+def ts_form(request, pk=None):
+    obj = get_object_or_404(TeacherSubject, pk=pk) if pk else None
+    form = TeacherSubjectForm(request.POST or None, instance=obj)
+    if form.is_valid():
+        form.save()
+        messages.success(request, 'Збережено.')
+        return redirect('scheduler:ts_list')
+    return render(request, 'scheduler/form.html', {
+        'form': form,
+        'title': 'Редагувати навантаження' if obj else 'Додати навантаження',
+        'back_url': 'scheduler:ts_list',
+    })
+
+
+def ts_delete(request, pk):
+    obj = get_object_or_404(TeacherSubject, pk=pk)
+    if request.method == 'POST':
+        obj.delete()
+        messages.success(request, 'Запис видалено.')
+        return redirect('scheduler:ts_list')
+    return render(request, 'scheduler/confirm_delete.html', {
+        'obj': obj, 'back_url': 'scheduler:ts_list',
+    })
+
+
+TeacherLoadFormSet = inlineformset_factory(
+    Teacher, TeacherSubject,
+    form=TeacherLoadRowForm,
+    extra=1,
+    can_delete=True,
+)
+
+
+def teacher_load(request, teacher_pk):
+    teacher = get_object_or_404(Teacher, pk=teacher_pk)
+    if request.method == 'POST':
+        formset = TeacherLoadFormSet(request.POST, instance=teacher)
+        if formset.is_valid():
+            formset.save()
+            messages.success(request, 'Навантаження збережено.')
+            return redirect('scheduler:teacher_load', teacher_pk=teacher.pk)
+    else:
+        formset = TeacherLoadFormSet(instance=teacher)
+    total_hours = teacher.teachersubject_set.aggregate(
+        total=models.Sum('hours_per_week')
+    )['total'] or 0
+    subject_totals = list(
+        teacher.teachersubject_set
+        .values('subject__name')
+        .annotate(total=models.Sum('hours_per_week'))
+        .order_by('subject__name')
+    )
+    return render(request, 'scheduler/teacher_load.html', {
+        'teacher': teacher,
+        'formset': formset,
+        'total_hours': total_hours,
+        'subject_totals': subject_totals,
+    })
+
+
+# ─── Bell schedules ──────────────────────────────────────────────────────────
+
+BellPeriodFormSet = inlineformset_factory(
+    BellSchedule, BellPeriod,
+    form=BellPeriodForm,
+    extra=1,
+    can_delete=True,
+)
+
+
+def bell_list(request):
+    return render(request, 'scheduler/bell_list.html', {
+        'bells': BellSchedule.objects.prefetch_related('periods').all(),
+    })
+
+
+def bell_form(request, pk=None):
+    obj = get_object_or_404(BellSchedule, pk=pk) if pk else None
+    if request.method == 'POST':
+        form = BellScheduleForm(request.POST, instance=obj)
+        formset = BellPeriodFormSet(request.POST, instance=obj or BellSchedule())
+        if form.is_valid() and formset.is_valid():
+            saved = form.save()
+            formset.instance = saved
+            formset.save()
+            messages.success(request, 'Збережено.')
+            return redirect('scheduler:bell_edit', pk=saved.pk)
+    else:
+        form = BellScheduleForm(instance=obj)
+        formset = BellPeriodFormSet(instance=obj or BellSchedule())
+    return render(request, 'scheduler/bell_form.html', {
+        'form': form,
+        'formset': formset,
+        'obj': obj,
+    })
+
+
+def bell_delete(request, pk):
+    obj = get_object_or_404(BellSchedule, pk=pk)
+    if request.method == 'POST':
+        obj.delete()
+        messages.success(request, 'Видалено.')
+        return redirect('scheduler:bell_list')
+    return render(request, 'scheduler/confirm_delete.html', {
+        'obj': obj, 'back_url': 'scheduler:bell_list',
+    })
+
+
+# ─── Schedules ───────────────────────────────────────────────────────────────
+
+def schedule_list(request):
+    return render(request, 'scheduler/schedule_list.html', {
+        'schedules': Schedule.objects.all(),
+    })
+
+
+def schedule_form(request, pk=None):
+    obj = get_object_or_404(Schedule, pk=pk) if pk else None
+    form = ScheduleForm(request.POST or None, instance=obj)
+    if form.is_valid():
+        form.save()
+        messages.success(request, 'Збережено.')
+        return redirect('scheduler:schedule_list')
+    return render(request, 'scheduler/form.html', {
+        'form': form,
+        'title': 'Редагувати розклад' if obj else 'Новий розклад',
+        'back_url': 'scheduler:schedule_list',
+    })
+
+
+def schedule_delete(request, pk):
+    obj = get_object_or_404(Schedule, pk=pk)
+    if request.method == 'POST':
+        obj.delete()
+        messages.success(request, 'Розклад видалено.')
+        return redirect('scheduler:schedule_list')
+    return render(request, 'scheduler/confirm_delete.html', {
+        'obj': obj, 'back_url': 'scheduler:schedule_list',
+    })
+
+
+def _validate_move(schedule, lesson, new_day, new_period, swap=None):
+    """Перевіряє переміщення уроку на (new_day, new_period). swap — урок з яким обмінюємось."""
+    errors = []
+    exclude = {lesson.pk}
+    if swap:
+        exclude.add(swap.pk)
+    D = schedule.days_per_week
+    week = lesson.week  # переміщення лише в межах одного тижня
+
+    # 1. Доступність вчителя
+    mask = lesson.teacher.available_days[:D].ljust(D, '0')
+    if new_day >= D or mask[new_day] != '1':
+        errors.append(f'Вчитель {lesson.teacher} недоступний у цей день')
+
+    # 2. Конфлікт вчителя
+    if Lesson.objects.filter(
+        schedule=schedule, teacher=lesson.teacher, week=week, day=new_day, period=new_period
+    ).exclude(pk__in=exclude).exists():
+        errors.append(f'Вчитель {lesson.teacher} вже має урок в цей час')
+
+    # 3. Конфлікт класу (для обміну в тому ж класі слот не змінюється — пропускаємо)
+    same_class_swap = swap and swap.school_class_id == lesson.school_class_id
+    if not same_class_swap:
+        if Lesson.objects.filter(
+            schedule=schedule, school_class=lesson.school_class, week=week, day=new_day, period=new_period
+        ).exclude(pk__in=exclude).exists():
+            errors.append(f'Клас {lesson.school_class} вже має урок в цей час')
+
+    # 4. Максимум уроків вчителя на день
+    if lesson.day != new_day:
+        cnt = Lesson.objects.filter(
+            schedule=schedule, teacher=lesson.teacher, week=week, day=new_day
+        ).exclude(pk__in=exclude).count() + 1
+        if cnt > lesson.teacher.max_lessons_per_day:
+            errors.append(f'Вчитель {lesson.teacher}: ліміт {lesson.teacher.max_lessons_per_day} ур/день буде перевищено')
+
+    # 5. Кабінет
+    if lesson.room_id:
+        busy_count = Lesson.objects.filter(
+            schedule=schedule, room=lesson.room, week=week, day=new_day, period=new_period
+        ).exclude(pk__in=exclude).count()
+        if busy_count >= lesson.room.max_simultaneous:
+            errors.append(f'Кабінет {lesson.room} вже зайнятий в цей час')
+
+    # 6. Без вікон — не перевіряємо для обміну в тому ж класі (набір слотів не змінюється)
+    if not same_class_swap:
+        # Новий день: додаємо new_period
+        new_day_periods = sorted(
+            list(Lesson.objects.filter(
+                schedule=schedule, school_class=lesson.school_class, week=week, day=new_day
+            ).exclude(pk__in=exclude).values_list('period', flat=True)) + [new_period]
+        )
+        if new_day_periods[0] != 0 or new_day_periods != list(range(len(new_day_periods))):
+            errors.append(f'Клас {lesson.school_class}: виникне вікно в {new_day + 1}-й день')
+
+        # Старий день: прибираємо lesson
+        if lesson.day != new_day:
+            old_periods = sorted(Lesson.objects.filter(
+                schedule=schedule, school_class=lesson.school_class, week=week, day=lesson.day
+            ).exclude(pk=lesson.pk).values_list('period', flat=True))
+            if old_periods and (old_periods[0] != 0 or old_periods != list(range(len(old_periods)))):
+                errors.append(f'Клас {lesson.school_class}: виникне вікно в {lesson.day + 1}-й день після переміщення')
+
+    return errors
+
+
+@require_POST
+def lesson_move(request, pk):
+    from django.http import JsonResponse
+    import json
+    schedule = get_object_or_404(Schedule, pk=pk)
+    try:
+        data = json.loads(request.body)
+        lesson_id = data['lesson_id']
+        new_day = int(data['new_day'])
+        new_period = int(data['new_period'])
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return JsonResponse({'ok': False, 'errors': ['Некоректний запит']}, status=400)
+    lesson = get_object_or_404(Lesson, pk=lesson_id, schedule=schedule)
+
+    # Урок в тій самій комірці — нічого не робимо
+    if lesson.day == new_day and lesson.period == new_period:
+        return JsonResponse({'ok': True})
+
+    # Чи є в цільовій комірці урок того ж класу в тому ж тижні (обмін)
+    swap = Lesson.objects.filter(
+        schedule=schedule, school_class=lesson.school_class,
+        week=lesson.week, day=new_day, period=new_period
+    ).first()
+
+    errors = _validate_move(schedule, lesson, new_day, new_period, swap)
+    if swap:
+        errors += _validate_move(schedule, swap, lesson.day, lesson.period, lesson)
+
+    if errors:
+        return JsonResponse({'ok': False, 'errors': errors})
+
+    old_day, old_period = lesson.day, lesson.period
+    if swap:
+        lesson.day, lesson.period = new_day, new_period
+        swap.day, swap.period = old_day, old_period
+        swap.save()
+    else:
+        lesson.day, lesson.period = new_day, new_period
+    lesson.save()
+
+    return JsonResponse({'ok': True})
+
+
+@require_POST
+def schedule_generate(request, pk):
+    from .generator import generate
+    ok, msg = generate(pk)
+    if ok:
+        messages.success(request, msg)
+    else:
+        messages.error(request, msg)
+    return redirect('scheduler:schedule_view', pk=pk)
+
+
+def room_schedule(request, schedule_pk, room_pk):
+    schedule = get_object_or_404(Schedule, pk=schedule_pk)
+    room = get_object_or_404(Room, pk=room_pk)
+    week = int(request.GET.get('week', 0))
+    lessons = schedule.lessons.filter(room=room, week=week).select_related('school_class', 'subject', 'teacher')
+    days = DAYS_FULL[:schedule.days_per_week]
+    periods = range(schedule.lessons_per_day)
+
+    # slot → list (може бути >1 при shared room)
+    grid = {d: {p: [] for p in periods} for d in range(schedule.days_per_week)}
+    for lesson in lessons:
+        grid[lesson.day][lesson.period].append(lesson)
+
+    bell_times = {}
+    if schedule.bell_schedule_id:
+        bell_times = {
+            bp.number - 1: bp
+            for bp in BellPeriod.objects.filter(bell_schedule_id=schedule.bell_schedule_id)
+        }
+
+    all_rooms = Room.objects.all()
+    return render(request, 'scheduler/room_schedule.html', {
+        'schedule': schedule,
+        'room': room,
+        'all_rooms': all_rooms,
+        'days': days,
+        'periods': periods,
+        'grid': grid,
+        'bell_times': bell_times,
+        'week': week,
+    })
+
+
+def teacher_schedule(request, schedule_pk, teacher_pk):
+    schedule = get_object_or_404(Schedule, pk=schedule_pk)
+    teacher = get_object_or_404(Teacher, pk=teacher_pk)
+    week = int(request.GET.get('week', 0))
+    lessons = schedule.lessons.filter(teacher=teacher, week=week).select_related('school_class', 'subject', 'room')
+    days = DAYS_FULL[:schedule.days_per_week]
+    periods = range(schedule.lessons_per_day)
+
+    grid = {d: {p: None for p in periods} for d in range(schedule.days_per_week)}
+    for lesson in lessons:
+        grid[lesson.day][lesson.period] = lesson
+
+    bell_times = {}
+    if schedule.bell_schedule_id:
+        bell_times = {
+            bp.number - 1: bp
+            for bp in BellPeriod.objects.filter(bell_schedule_id=schedule.bell_schedule_id)
+        }
+
+    all_teachers = Teacher.objects.all()
+    return render(request, 'scheduler/teacher_schedule.html', {
+        'schedule': schedule,
+        'teacher': teacher,
+        'all_teachers': all_teachers,
+        'days': days,
+        'periods': periods,
+        'grid': grid,
+        'bell_times': bell_times,
+        'week': week,
+    })
+
+
+def schedule_view(request, pk):
+    schedule = get_object_or_404(Schedule, pk=pk)
+    week = int(request.GET.get('week', 0))
+    lessons = schedule.lessons.filter(week=week).select_related('school_class', 'subject', 'teacher', 'room')
+    classes = SchoolClass.objects.all()
+    days = DAYS_FULL[:schedule.days_per_week]
+    periods = range(schedule.lessons_per_day)
+
+    # Build grid: class → day → period → lesson
+    grid = {}
+    for sc in classes:
+        grid[sc.pk] = {d: {p: None for p in periods} for d in range(schedule.days_per_week)}
+    for lesson in lessons:
+        if lesson.day < schedule.days_per_week and lesson.period < schedule.lessons_per_day:
+            grid[lesson.school_class_id][lesson.day][lesson.period] = lesson
+
+    bell_times = {}
+    if schedule.bell_schedule_id:
+        bell_times = {
+            bp.number - 1: bp
+            for bp in BellPeriod.objects.filter(bell_schedule_id=schedule.bell_schedule_id)
+        }  # 0-based
+
+    return render(request, 'scheduler/schedule_view.html', {
+        'schedule': schedule,
+        'classes': classes,
+        'days': days,
+        'periods': periods,
+        'grid': grid,
+        'all_teachers': Teacher.objects.all(),
+        'bell_times': bell_times,
+        'week': week,
+    })

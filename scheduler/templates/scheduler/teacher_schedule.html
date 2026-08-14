@@ -1,0 +1,74 @@
+{% extends "scheduler/base.html" %}
+{% load scheduler_tags %}
+{% block title %}{{ teacher }} — {{ schedule.name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <a href="{% url 'scheduler:schedule_view' schedule.pk %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h4 class="mb-0">{{ teacher }}</h4>
+  {% if schedule.is_active %}<span class="badge bg-success">Активний</span>{% endif %}
+
+  <div class="btn-group btn-group-sm me-auto" role="group">
+    <a href="?week=0" class="btn {% if week == 0 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень А</a>
+    <a href="?week=1" class="btn {% if week == 1 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень Б</a>
+  </div>
+
+  {# Перемикач вчителів #}
+  <div class="dropdown">
+    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+      <i class="bi bi-person-badge me-1"></i>Інший вчитель
+    </button>
+    <ul class="dropdown-menu dropdown-menu-end" style="max-height:320px;overflow-y:auto;">
+      {% for t in all_teachers %}
+      <li>
+        <a class="dropdown-item {% if t.pk == teacher.pk %}active{% endif %}"
+           href="{% url 'scheduler:teacher_schedule' schedule.pk t.pk %}">
+          {{ t }}
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<div class="table-card" style="overflow-x:auto;">
+  <table class="table table-bordered table-sm mb-0" style="min-width:520px;">
+    <thead>
+      <tr class="table-light">
+        <th style="width:36px;">#</th>
+        {% for day in days %}<th>{{ day }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in periods %}
+      {% with bp=bell_times|get_item:p %}
+      <tr>
+        <td class="text-center text-muted" style="white-space:nowrap;">
+          <div class="fw-semibold">{{ p|add:1 }}</div>
+          {% if bp %}
+            <div style="font-size:.7rem;">{{ bp.start_time|time:"H:i" }}</div>
+            <div style="font-size:.7rem;">{{ bp.end_time|time:"H:i" }}</div>
+          {% endif %}
+        </td>
+        {% for d in schedule.days_per_week|make_range %}
+        {% with lesson=grid|get_item:d|get_item:p %}
+        <td {% if lesson %}style="border-left:3px solid {{ lesson.subject.color }};background:{{ lesson.subject.color }}22;"{% endif %}>
+          {% if lesson %}
+            <div class="fw-semibold" style="font-size:.82rem;">{{ lesson.subject.short_name|default:lesson.subject.name }}</div>
+            <div class="text-muted" style="font-size:.75rem;">{{ lesson.school_class }}</div>
+            {% if lesson.room %}
+              <div class="text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</div>
+            {% endif %}
+          {% endif %}
+        </td>
+        {% endwith %}
+        {% endfor %}
+      </tr>
+      {% endwith %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

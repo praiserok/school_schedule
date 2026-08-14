@@ -1,0 +1,132 @@
+{% extends "scheduler/base.html" %}
+{% block title %}{% if obj %}{{ obj.name }}{% else %}Новий розклад дзвінків{% endif %}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="{% url 'scheduler:bell_list' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h4 class="mb-0">{% if obj %}{{ obj.name }}{% else %}Новий розклад дзвінків{% endif %}</h4>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  {{ formset.management_form }}
+
+  <div class="table-card mb-3">
+    <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2">
+      <label class="fw-semibold mb-0 me-2">Назва</label>
+      {{ form.name }}
+      {% if form.name.errors %}<span class="text-danger small">{{ form.name.errors.0 }}</span>{% endif %}
+    </div>
+
+    <table class="table table-sm align-middle mb-0" id="bell-table">
+      <thead>
+        <tr class="table-light">
+          <th style="width:80px;">Урок №</th>
+          <th style="width:130px;">Початок</th>
+          <th style="width:130px;">Кінець</th>
+          <th style="width:40px;"></th>
+        </tr>
+      </thead>
+      <tbody id="formset-body">
+        {% for form in formset %}
+        <tr class="formset-row">
+          <td>
+            {{ form.id }}
+            {{ form.number }}
+            {% if form.number.errors %}<div class="text-danger small">{{ form.number.errors.0 }}</div>{% endif %}
+          </td>
+          <td>
+            {{ form.start_time }}
+            {% if form.start_time.errors %}<div class="text-danger small">{{ form.start_time.errors.0 }}</div>{% endif %}
+          </td>
+          <td>
+            {{ form.end_time }}
+            {% if form.end_time.errors %}<div class="text-danger small">{{ form.end_time.errors.0 }}</div>{% endif %}
+          </td>
+          <td class="text-center">
+            {% if form.instance.pk %}
+              <label class="d-flex align-items-center justify-content-center" title="Видалити">
+                {{ form.DELETE }}
+                <i class="bi bi-trash text-danger" style="pointer-events:none;"></i>
+              </label>
+            {% else %}
+              <button type="button" class="btn btn-sm btn-outline-secondary remove-row">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="d-flex gap-2">
+    <button type="button" id="add-row" class="btn btn-outline-primary btn-sm">
+      <i class="bi bi-plus-lg me-1"></i>Додати урок
+    </button>
+    <button type="submit" class="btn btn-primary btn-sm">
+      <i class="bi bi-check-lg me-1"></i>Зберегти
+    </button>
+    <a href="{% url 'scheduler:bell_list' %}" class="btn btn-outline-secondary btn-sm">Скасувати</a>
+  </div>
+</form>
+
+<table style="display:none;">
+  <tbody>
+    <tr id="empty-row" class="formset-row">
+      {{ formset.empty_form.id }}
+      <td>{{ formset.empty_form.number }}</td>
+      <td>{{ formset.empty_form.start_time }}</td>
+      <td>{{ formset.empty_form.end_time }}</td>
+      <td class="text-center">
+        <button type="button" class="btn btn-sm btn-outline-secondary remove-row">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const totalForms = document.getElementById('id_bellperiod_set-TOTAL_FORMS');
+  const body = document.getElementById('formset-body');
+  const emptyRow = document.getElementById('empty-row');
+
+  document.querySelectorAll('input[id$="-DELETE"]').forEach(cb => {
+    cb.style.display = 'none';
+    cb.closest('label')?.addEventListener('click', function (e) {
+      e.preventDefault();
+      cb.checked = !cb.checked;
+      this.closest('tr').style.opacity = cb.checked ? '0.35' : '1';
+    });
+  });
+
+  document.getElementById('add-row').addEventListener('click', function () {
+    const idx = parseInt(totalForms.value);
+    const html = emptyRow.innerHTML.replace(/__prefix__/g, idx);
+    const tr = document.createElement('tr');
+    tr.className = 'formset-row';
+    tr.innerHTML = html;
+    body.appendChild(tr);
+    totalForms.value = idx + 1;
+
+    // Автозаповнення номера уроку
+    const rows = body.querySelectorAll('.formset-row');
+    const numInput = tr.querySelector('input[id$="-number"]');
+    if (numInput) numInput.value = rows.length;
+
+    tr.querySelector('.remove-row')?.addEventListener('click', () => tr.remove());
+  });
+
+  document.querySelectorAll('.remove-row').forEach(btn => {
+    btn.addEventListener('click', function () { this.closest('tr').remove(); });
+  });
+})();
+</script>
+{% endblock %}

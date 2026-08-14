@@ -1,0 +1,554 @@
+{% extends "scheduler/base.html" %}
+{% block title %}Довідка{% endblock %}
+
+{% block content %}
+<style>
+  .help-toc { position: sticky; top: 1.5rem; }
+  .help-toc a { color: #495057; text-decoration: none; font-size: .875rem; display: block; padding: .2rem .75rem; border-left: 2px solid transparent; }
+  .help-toc a:hover { color: #0d6efd; border-color: #0d6efd; }
+  .help-toc .toc-section { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: #adb5bd; padding: .5rem .75rem .1rem; margin-top: .5rem; }
+  .help-section { scroll-margin-top: 80px; }
+  .help-step { counter-increment: step; }
+  .step-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 50%;
+    background: #0d6efd; color: #fff; font-weight: 700; font-size: .9rem;
+    flex-shrink: 0;
+  }
+  .constraint-icon { font-size: 1.1rem; width: 28px; text-align: center; }
+  .tip-box { background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 6px; padding: .75rem 1rem; font-size: .9rem; }
+  .warn-box { background: #f8d7da; border-left: 4px solid #dc3545; border-radius: 6px; padding: .75rem 1rem; font-size: .9rem; }
+  .info-box { background: #cff4fc; border-left: 4px solid #0dcaf0; border-radius: 6px; padding: .75rem 1rem; font-size: .9rem; }
+  .entity-card { border-radius: 10px; border: 1px solid #dee2e6; background: #fff; padding: 1.25rem; margin-bottom: 1rem; }
+  .entity-card h5 { margin-bottom: .75rem; display: flex; align-items: center; gap: .5rem; }
+  .field-list dt { font-weight: 600; min-width: 200px; }
+  .field-list dd { color: #495057; }
+  code { background: #f1f3f5; border-radius: 4px; padding: 1px 5px; font-size: .85em; }
+</style>
+
+<div class="row g-4">
+  <!-- TOC -->
+  <div class="col-lg-3 d-none d-lg-block">
+    <div class="help-toc table-card p-2">
+      <div class="toc-section">Початок</div>
+      <a href="#intro"><i class="bi bi-info-circle me-1"></i>Що це таке</a>
+      <a href="#steps"><i class="bi bi-list-ol me-1"></i>Покрокова інструкція</a>
+
+      <div class="toc-section">Довідник</div>
+      <a href="#entities"><i class="bi bi-database me-1"></i>Сутності</a>
+      <a href="#ent-teacher">— Вчителі</a>
+      <a href="#ent-subject">— Предмети</a>
+      <a href="#ent-room">— Кабінети</a>
+      <a href="#ent-class">— Класи</a>
+      <a href="#ent-load">— Навантаження</a>
+      <a href="#ent-bells">— Дзвінки</a>
+      <a href="#ent-schedule">— Розклад</a>
+
+      <div class="toc-section">Генератор</div>
+      <a href="#generator"><i class="bi bi-cpu me-1"></i>Як працює</a>
+      <a href="#constraints">— Обмеження</a>
+      <a href="#rooms-algo">— Розподіл кабінетів</a>
+      <a href="#no-solution">— Якщо не знайдено</a>
+
+      <div class="toc-section">Редактор</div>
+      <a href="#editor"><i class="bi bi-pencil-square me-1"></i>Ручне редагування</a>
+      <a href="#views"><i class="bi bi-eye me-1"></i>Перегляд розкладу</a>
+
+      <div class="toc-section">Спеціальні випадки</div>
+      <a href="#primary">— Початкова школа</a>
+      <a href="#groups">— Поділ на групи</a>
+      <a href="#gym">— Один спортзал</a>
+      <a href="#avail">— Доступність вчителя</a>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="col-lg-9">
+
+    <!-- Що це таке -->
+    <div id="intro" class="help-section mb-5">
+      <h4 class="mb-3"><i class="bi bi-info-circle text-primary me-2"></i>Що це таке</h4>
+      <p class="text-muted">
+        Система автоматичного складання шкільного розкладу. Вона враховує всі обмеження — вчителів, кабінети, класи, групи та час дзвінків — і за допомогою алгоритму оптимізації будує готовий розклад без конфліктів.
+      </p>
+      <div class="row g-3">
+        <div class="col-sm-4">
+          <div class="table-card p-3 text-center h-100">
+            <i class="bi bi-input-cursor-text fs-2 text-primary mb-2 d-block"></i>
+            <div class="fw-semibold">Крок 1</div>
+            <div class="text-muted small">Вносите дані: вчителі, предмети, кабінети, класи, навантаження</div>
+          </div>
+        </div>
+        <div class="col-sm-4">
+          <div class="table-card p-3 text-center h-100">
+            <i class="bi bi-cpu fs-2 text-success mb-2 d-block"></i>
+            <div class="fw-semibold">Крок 2</div>
+            <div class="text-muted small">Натискаєте "Згенерувати" — алгоритм складає розклад (до 2 хв)</div>
+          </div>
+        </div>
+        <div class="col-sm-4">
+          <div class="table-card p-3 text-center h-100">
+            <i class="bi bi-pencil-square fs-2 text-warning mb-2 d-block"></i>
+            <div class="fw-semibold">Крок 3</div>
+            <div class="text-muted small">За потреби редагуєте вручну — система перевіряє кожну зміну</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <hr class="my-4">
+
+    <!-- Покрокова інструкція -->
+    <div id="steps" class="help-section mb-5">
+      <h4 class="mb-4"><i class="bi bi-list-ol text-primary me-2"></i>Покрокова інструкція — з нуля до розкладу</h4>
+
+      <div class="d-flex gap-3 mb-4 help-step">
+        <div class="step-badge">1</div>
+        <div class="flex-grow-1">
+          <h6 class="mb-1">Внести вчителів</h6>
+          <p class="text-muted mb-2">Меню <strong>Вчителі → Додати</strong>. Для кожного вчителя вкажіть:</p>
+          <ul class="text-muted mb-2">
+            <li>Прізвище та Імʼя</li>
+            <li>Доступні дні (за замовчуванням всі Пн–Пт)</li>
+            <li>Ліміт уроків на день (зазвичай 5–7)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3 mb-4 help-step">
+        <div class="step-badge">2</div>
+        <div class="flex-grow-1">
+          <h6 class="mb-1">Внести предмети</h6>
+          <p class="text-muted mb-2">Меню <strong>Предмети → Додати</strong>. Обов'язково:</p>
+          <ul class="text-muted mb-2">
+            <li>Додайте скорочення — воно відображається у тісній сітці розкладу</li>
+            <li>Виберіть колір — щоб розклад був наочним</li>
+            <li>Для фізкультури: увімкніть "Дозволити спільний кабінет" та різницю паралелей</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3 mb-4 help-step">
+        <div class="step-badge">3</div>
+        <div class="flex-grow-1">
+          <h6 class="mb-1">Внести кабінети</h6>
+          <p class="text-muted mb-2">Меню <strong>Кабінети → Додати</strong>:</p>
+          <ul class="text-muted mb-2">
+            <li><strong>Спортзал</strong> — вкажіть спеціалізацію "Фізкультура" і <code>Макс. класів одночасно = 2</code></li>
+            <li><strong>Хімлаб, фізлаб</strong> — вкажіть відповідну спеціалізацію</li>
+            <li><strong>Класні кімнати</strong> — без спеціалізації</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3 mb-4 help-step">
+        <div class="step-badge">4</div>
+        <div class="flex-grow-1">
+          <h6 class="mb-1">Внести класи</h6>
+          <p class="text-muted mb-2">Меню <strong>Класи → Додати</strong>:</p>
+          <ul class="text-muted mb-2">
+            <li>Паралель (1–11) та літера (А, Б, В — або порожньо)</li>
+            <li>Для 1–4 класів — вкажіть основний кабінет</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3 mb-4 help-step">
+        <div class="step-badge">5</div>
+        <div class="flex-grow-1">
+          <h6 class="mb-1">Внести навантаження</h6>
+          <p class="text-muted mb-2">
+            Меню <strong>Вчителі</strong> → кнопка <i class="bi bi-table"></i> біля вчителя → <strong>Навантаження</strong>.
+            Для кожного рядка: предмет, клас, кількість годин на тиждень, і (лише для поділу на групи) номер групи.
+          </p>
+          <div class="tip-box">
+            <i class="bi bi-lightbulb me-1"></i>
+            <strong>Порада:</strong> стежте щоб сума годин не перевищувала <code>макс/день × кількість доступних днів</code>. Наприклад 5 днів × 6 уроків = 30 год/тиж максимум.
+          </div>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3 mb-4 help-step">
+        <div class="step-badge">6</div>
+        <div class="flex-grow-1">
+          <h6 class="mb-1">Налаштувати розклад дзвінків <span class="badge bg-secondary fw-normal ms-1" style="font-size:.7rem;">необов'язково</span></h6>
+          <p class="text-muted mb-0">
+            Меню <strong>Дзвінки → Додати</strong>. Введіть назву та часи початку/кінця кожного уроку.
+            Кнопка "+ Додати урок" автоматично підставляє наступний номер.
+          </p>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3 mb-4 help-step">
+        <div class="step-badge">7</div>
+        <div class="flex-grow-1">
+          <h6 class="mb-1">Створити розклад</h6>
+          <p class="text-muted mb-0">
+            Меню <strong>Розклади → Новий розклад</strong>. Вкажіть назву, кількість днів (1–5), уроків на день,
+            прив'яжіть розклад дзвінків. Позначте "Активний" якщо це основний розклад.
+          </p>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3 mb-4 help-step">
+        <div class="step-badge">8</div>
+        <div class="flex-grow-1">
+          <h6 class="mb-1">Згенерувати розклад</h6>
+          <p class="text-muted mb-0">
+            Відкрийте розклад → кнопка <strong>"Згенерувати розклад"</strong>.
+            Генерація займає від кількох секунд до 2 хвилин.
+            Після завершення відображається кількість уроків і час генерації.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <hr class="my-4">
+
+    <!-- Сутності -->
+    <div id="entities" class="help-section mb-4">
+      <h4 class="mb-4"><i class="bi bi-database text-primary me-2"></i>Сутності та їх логіка</h4>
+
+      <div id="ent-teacher" class="entity-card help-section">
+        <h5><i class="bi bi-person-badge text-primary"></i>Вчитель</h5>
+        <dl class="row field-list">
+          <dt class="col-sm-4">Прізвище, Імʼя</dt>
+          <dd class="col-sm-8">Ідентифікатор вчителя у системі</dd>
+          <dt class="col-sm-4">Доступні дні</dt>
+          <dd class="col-sm-8">Генератор <strong>не ставить уроки</strong> у позначені як недоступні дні. Відображаються у дашборді як кольорові значки</dd>
+          <dt class="col-sm-4">Макс. уроків на день</dt>
+          <dd class="col-sm-8">Верхня межа. Перевіряється і генератором, і ручним редактором</dd>
+        </dl>
+      </div>
+
+      <div id="ent-subject" class="entity-card help-section">
+        <h5><i class="bi bi-book text-success"></i>Предмет</h5>
+        <dl class="row field-list">
+          <dt class="col-sm-4">Назва / Скорочення</dt>
+          <dd class="col-sm-8">Скорочення відображається у сітці розкладу де мало місця</dd>
+          <dt class="col-sm-4">Колір</dt>
+          <dd class="col-sm-8">HEX-колір для візуального виділення у сітці: лівий бордер + прозорий фон</dd>
+          <dt class="col-sm-4">Дозволити спільний кабінет</dt>
+          <dd class="col-sm-8">Якщо увімкнено — два класи можуть одночасно займати один кабінет (наприклад, фізкультура у спортзалі)</dd>
+          <dt class="col-sm-4">Макс. різниця паралелей</dt>
+          <dd class="col-sm-8">При спільному кабінеті: <code>2</code> означає, що разом можуть бути 3-й і 5-й клас, але не 1-й і 9-й</dd>
+        </dl>
+      </div>
+
+      <div id="ent-room" class="entity-card help-section">
+        <h5><i class="bi bi-door-open text-warning"></i>Кабінет</h5>
+        <dl class="row field-list">
+          <dt class="col-sm-4">Назва</dt>
+          <dd class="col-sm-8">Номер або назва (Спортзал, Хімлаб, каб. 301)</dd>
+          <dt class="col-sm-4">Спеціалізація</dt>
+          <dd class="col-sm-8">Якщо вказано предмет — кабінет використовується <strong>тільки</strong> для нього. Порожньо = загальний</dd>
+          <dt class="col-sm-4">Місткість</dt>
+          <dd class="col-sm-8">Інформаційне поле (не впливає на генерацію)</dd>
+          <dt class="col-sm-4">Макс. класів одночасно</dt>
+          <dd class="col-sm-8">Для спортзалу ставте <code>2</code>: дозволяє двом класам одночасно проводити урок в одному залі</dd>
+        </dl>
+      </div>
+
+      <div id="ent-class" class="entity-card help-section">
+        <h5><i class="bi bi-people text-info"></i>Клас</h5>
+        <dl class="row field-list">
+          <dt class="col-sm-4">Паралель + Літера</dt>
+          <dd class="col-sm-8">Наприклад <code>5А</code>. Літера необов'язкова — можна просто <code>5</code></dd>
+          <dt class="col-sm-4">Основний кабінет</dt>
+          <dd class="col-sm-8">Для початкової школи (1–4 клас). Генератор надає цьому кабінету пріоритет при розподілі</dd>
+        </dl>
+      </div>
+
+      <div id="ent-load" class="entity-card help-section">
+        <h5><i class="bi bi-table text-secondary"></i>Навантаження (TeacherSubject)</h5>
+        <p class="text-muted mb-3">Ключова сутність — визначає <strong>хто</strong> викладає <strong>який предмет</strong> у <strong>якому класі</strong> і <strong>скільки годин</strong>.</p>
+        <dl class="row field-list">
+          <dt class="col-sm-4">Вчитель + Предмет + Клас</dt>
+          <dd class="col-sm-8">Основна трійка</dd>
+          <dt class="col-sm-4">Годин на тиждень</dt>
+          <dd class="col-sm-8">Скільки разів ставити цей урок у тижневий розклад</dd>
+          <dt class="col-sm-4">Група</dt>
+          <dd class="col-sm-8">
+            Якщо клас ділиться на групи (англійська, інформатика): <code>1</code> або <code>2</code>.
+            Групові уроки одного предмету в одному класі генератор розміщує <strong>в один і той самий слот</strong> —
+            дві групи паралельно, різні кабінети, різні вчителі.
+          </dd>
+        </dl>
+        <div class="info-box mt-3">
+          <strong>Приклад поділу:</strong><br>
+          <code>Іваненко | Англійська | 5А | 2 год | гр.1</code><br>
+          <code>Петренко | Англійська | 5А | 2 год | гр.2</code><br>
+          → клас 5А ділиться навпіл, обидва уроки йдуть одночасно
+        </div>
+      </div>
+
+      <div id="ent-bells" class="entity-card help-section">
+        <h5><i class="bi bi-alarm text-danger"></i>Розклад дзвінків</h5>
+        <p class="text-muted mb-2">Набір часових проміжків для кожного уроку:</p>
+        <ul class="text-muted">
+          <li>1 урок: 08:00–08:45</li>
+          <li>2 урок: 08:55–09:40</li>
+          <li>…</li>
+        </ul>
+        <p class="text-muted mb-0">Один розклад дзвінків можна прив'язати до кількох розкладів занять. Відображається у сітці поруч з номером уроку.</p>
+      </div>
+
+      <div id="ent-schedule" class="entity-card help-section">
+        <h5><i class="bi bi-grid-3x3-gap text-success"></i>Розклад занять</h5>
+        <dl class="row field-list">
+          <dt class="col-sm-4">Назва</dt>
+          <dd class="col-sm-8">Довільна, напр. "2025–2026 основний"</dd>
+          <dt class="col-sm-4">Днів на тиждень</dt>
+          <dd class="col-sm-8">1–5 (зазвичай 5 = Пн–Пт)</dd>
+          <dt class="col-sm-4">Уроків на день</dt>
+          <dd class="col-sm-8">Максимальна кількість слотів у день</dd>
+          <dt class="col-sm-4">Розклад дзвінків</dt>
+          <dd class="col-sm-8">Прив'язка для відображення часів початку/кінця уроків</dd>
+          <dt class="col-sm-4">Активний</dt>
+          <dd class="col-sm-8">Використовується на дашборді та в посиланнях "розклад вчителя"</dd>
+        </dl>
+      </div>
+    </div>
+
+    <hr class="my-4">
+
+    <!-- Генератор -->
+    <div id="generator" class="help-section mb-5">
+      <h4 class="mb-3"><i class="bi bi-cpu text-primary me-2"></i>Як працює генератор</h4>
+      <p class="text-muted">
+        Використовується <strong>OR-Tools CP-SAT</strong> — промисловий solver від Google для задач задоволення обмежень.
+        Він перебирає мільярди варіантів за лічені секунди і знаходить розклад, що відповідає <em>всім</em> заданим правилам одночасно.
+      </p>
+
+      <div id="constraints" class="help-section">
+        <h6 class="fw-semibold mb-3 mt-4">Що гарантує генератор</h6>
+        <div class="table-card mb-4">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th style="width:36px;"></th>
+                <th>Обмеження</th>
+                <th>Опис</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Кількість годин</strong></td>
+                <td class="text-muted">Кожне навантаження виконується рівно стільки разів, скільки задано</td>
+              </tr>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Без конфліктів класу</strong></td>
+                <td class="text-muted">Клас не може мати два уроки в один слот (крім групових — вони спеціально йдуть одночасно)</td>
+              </tr>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Без конфліктів вчителя</strong></td>
+                <td class="text-muted">Вчитель не може вести два уроки одночасно</td>
+              </tr>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Доступність вчителя</strong></td>
+                <td class="text-muted">Уроки ставляться тільки у доступні дні</td>
+              </tr>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Ліміт уроків на день</strong></td>
+                <td class="text-muted">Не більше <code>max_lessons_per_day</code> уроків у вчителя за один день</td>
+              </tr>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Рівномірне навантаження</strong></td>
+                <td class="text-muted">Кількість уроків у класу по днях відрізняється не більше ніж на 1</td>
+              </tr>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Без вікон</strong></td>
+                <td class="text-muted">Уроки класу йдуть підряд, починаючи з першого слоту (немає "вікон" у середині)</td>
+              </tr>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Групові уроки одночасно</strong></td>
+                <td class="text-muted">Обидві групи одного предмету в одному класі завжди ставляться в один і той самий слот</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="rooms-algo" class="help-section">
+        <h6 class="fw-semibold mb-3">Розподіл кабінетів</h6>
+        <p class="text-muted mb-2">Кабінети призначаються після генерації, у порядку пріоритету:</p>
+        <div class="d-flex flex-column gap-2 mb-3">
+          <div class="d-flex gap-2 align-items-start">
+            <span class="badge bg-primary rounded-pill" style="min-width:24px;text-align:center;">1</span>
+            <div class="text-muted">Спеціалізований кабінет для цього предмету (хімлаб для хімії, спортзал для фізкультури)</div>
+          </div>
+          <div class="d-flex gap-2 align-items-start">
+            <span class="badge bg-secondary rounded-pill" style="min-width:24px;text-align:center;">2</span>
+            <div class="text-muted">Основний кабінет класу — якщо він є і предмет не вимагає спец. приміщення</div>
+          </div>
+          <div class="d-flex gap-2 align-items-start">
+            <span class="badge bg-light text-dark border rounded-pill" style="min-width:24px;text-align:center;">3</span>
+            <div class="text-muted">Будь-який вільний загальний кабінет</div>
+          </div>
+        </div>
+        <div class="info-box">
+          При спільному кабінеті (спортзал): перший клас отримує зал. Другий теж може отримати зал, якщо різниця паралелей в межах ліміту і кабінет не переповнений. Інакше — шукає інший вільний.
+        </div>
+      </div>
+
+      <div id="no-solution" class="help-section mt-4">
+        <h6 class="fw-semibold mb-3">Якщо розклад не знайдено</h6>
+        <div class="warn-box mb-3">
+          <strong>Можливі причини:</strong>
+          <ul class="mb-0 mt-1">
+            <li>Сума годин вчителя перевищує його можливості: <code>годин/тиж &gt; днів × макс/день</code></li>
+            <li>Класу фізично неможливо скласти розклад без вікон при такій кількості годин</li>
+            <li>Кілька жорстких обмежень разом роблять задачу нерозв'язною</li>
+          </ul>
+        </div>
+        <p class="text-muted mb-0">
+          <strong>Що робити:</strong> відкрийте дашборд, перевірте стовпець "Год/тиж" кожного вчителя.
+          Порівняйте з <code>Макс/день × кількість доступних днів</code>.
+          Зменшіть навантаження або збільшіть ліміт.
+        </p>
+      </div>
+    </div>
+
+    <hr class="my-4">
+
+    <!-- Ручне редагування -->
+    <div id="editor" class="help-section mb-5">
+      <h4 class="mb-3"><i class="bi bi-pencil-square text-primary me-2"></i>Ручне редагування</h4>
+      <p class="text-muted">Після генерації розклад можна коригувати вручну. Система перевіряє кожну зміну і не дозволяє порушити жодне обмеження.</p>
+
+      <h6 class="fw-semibold mt-3 mb-2">Як увімкнути</h6>
+      <p class="text-muted">Кнопка <strong>"Редагувати"</strong> у шапці сторінки розкладу.</p>
+
+      <h6 class="fw-semibold mt-3 mb-2">Як переміщати урок</h6>
+      <ol class="text-muted">
+        <li class="mb-1">Клікніть на урок — він виділяється жовтою рамкою</li>
+        <li class="mb-1">Клікніть на іншу комірку <strong>того ж класу</strong>:
+          <ul>
+            <li>Порожня → урок переміщується туди</li>
+            <li>Зайнята → уроки міняються місцями (swap)</li>
+          </ul>
+        </li>
+        <li>При успіху — сторінка оновлюється</li>
+      </ol>
+
+      <h6 class="fw-semibold mt-3 mb-2">Що перевіряється при кожному переміщенні</h6>
+      <div class="table-card mb-3">
+        <table class="table table-sm align-middle mb-0">
+          <tbody>
+            <tr><td class="text-success fw-bold ps-3">✓</td><td>Доступність вчителя у новий день</td></tr>
+            <tr><td class="text-success fw-bold ps-3">✓</td><td>Відсутність конфлікту вчителя (вже веде урок у цей час)</td></tr>
+            <tr><td class="text-success fw-bold ps-3">✓</td><td>Відсутність конфлікту класу</td></tr>
+            <tr><td class="text-success fw-bold ps-3">✓</td><td>Ліміт уроків вчителя на день</td></tr>
+            <tr><td class="text-success fw-bold ps-3">✓</td><td>Зайнятість кабінету</td></tr>
+            <tr><td class="text-success fw-bold ps-3">✓</td><td>Відсутність вікон у розкладі класу після переміщення</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="warn-box">
+        Якщо хоча б одна перевірка не пройшла — показується повідомлення з описом і урок <strong>не переміщується</strong>.
+        Переміщення допускається тільки <strong>в межах одного класу</strong>.
+      </div>
+
+      <p class="text-muted mt-3 mb-0">
+        <i class="bi bi-keyboard me-1"></i><strong>Escape</strong> або повторний клік на виділений урок — скасувати виділення.
+      </p>
+    </div>
+
+    <hr class="my-4">
+
+    <!-- Перегляд -->
+    <div id="views" class="help-section mb-5">
+      <h4 class="mb-3"><i class="bi bi-eye text-primary me-2"></i>Перегляд розкладу</h4>
+
+      <div class="row g-3">
+        <div class="col-md-4">
+          <div class="entity-card h-100">
+            <h6><i class="bi bi-grid-3x3 text-success me-1"></i>Сітка за класами</h6>
+            <p class="text-muted small mb-0">
+              Головна сторінка розкладу. Кожен клас — окрема таблиця (рядки = уроки, стовпці = дні).
+              Під шапкою — рядок з іменами класів для швидкої навігації.
+            </p>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="entity-card h-100">
+            <h6><i class="bi bi-person text-primary me-1"></i>Розклад вчителя</h6>
+            <p class="text-muted small mb-0">
+              Дропдаун "Розклад вчителя" або кнопка <i class="bi bi-calendar3"></i> на дашборді.
+              Показує персональну сітку: предмет, клас, кабінет у кожному слоті.
+            </p>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="entity-card h-100">
+            <h6><i class="bi bi-door-open text-warning me-1"></i>Завантаженість кабінету</h6>
+            <p class="text-muted small mb-0">
+              Меню <strong>Кабінети</strong> → кнопка <i class="bi bi-calendar3"></i>.
+              Для спортзалу може показувати два уроки в одному слоті.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <hr class="my-4">
+
+    <!-- Спеціальні випадки -->
+    <div class="help-section mb-4">
+      <h4 class="mb-4"><i class="bi bi-stars text-primary me-2"></i>Спеціальні випадки</h4>
+
+      <div id="primary" class="entity-card help-section">
+        <h5><i class="bi bi-house-heart text-info"></i>Початкова школа (1–4 клас)</h5>
+        <ol class="text-muted mb-0">
+          <li>У налаштуваннях класу вказати <strong>Основний кабінет</strong></li>
+          <li>Генератор автоматично намагається ставити всі уроки у цей кабінет, крім тих що вимагають спеціального приміщення</li>
+        </ol>
+      </div>
+
+      <div id="groups" class="entity-card help-section">
+        <h5><i class="bi bi-people-fill text-success"></i>Поділ класу на групи (англійська, інформатика)</h5>
+        <ol class="text-muted mb-2">
+          <li>Додати <strong>два</strong> записи навантаження для одного класу і предмету:</li>
+        </ol>
+        <div class="info-box mb-3">
+          <code>Іваненко | Англійська | 5А | 2 год | гр.1</code><br>
+          <code>Петренко | Англійська | 5А | 2 год | гр.2</code>
+        </div>
+        <ul class="text-muted mb-0">
+          <li>Годин на тиждень у обох груп має бути <strong>однаково</strong></li>
+          <li>Генератор автоматично поставить обидва уроки в один слот</li>
+          <li>Якщо у класу є основний кабінет — одна з груп може взяти його, інша шукатиме вільний</li>
+        </ul>
+      </div>
+
+      <div id="gym" class="entity-card help-section">
+        <h5><i class="bi bi-trophy text-warning"></i>Фізкультура з одним спортзалом</h5>
+        <ol class="text-muted mb-0">
+          <li>У кабінеті <strong>Спортзал</strong>: <code>Макс. класів одночасно = 2</code>, спеціалізація = Фізкультура</li>
+          <li>У предметі <strong>Фізкультура</strong>: увімкнути "Дозволити спільний кабінет", різниця паралелей = <code>2</code> (рекомендовано)</li>
+          <li>Генератор автоматично підбере пари класів з близькими паралелями</li>
+        </ol>
+      </div>
+
+      <div id="avail" class="entity-card help-section">
+        <h5><i class="bi bi-calendar-x text-danger"></i>Вчитель доступний не кожен день</h5>
+        <ol class="text-muted mb-0">
+          <li>У налаштуваннях вчителя зняти позначки з недоступних днів</li>
+          <li>Генератор не поставить жодного уроку цього вчителя в ці дні</li>
+          <li>Доступні дні видно на дашборді у вигляді кольорових значків Пн–Пт</li>
+        </ol>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

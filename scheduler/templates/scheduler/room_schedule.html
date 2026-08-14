@@ -1,0 +1,79 @@
+{% extends "scheduler/base.html" %}
+{% load scheduler_tags %}
+{% block title %}{{ room }} — {{ schedule.name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <a href="{% url 'scheduler:room_list' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h4 class="mb-0">
+    <i class="bi bi-door-open me-1 text-muted"></i>{{ room.name }}
+    {% if room.subject %}
+      <span class="badge bg-warning text-dark ms-1" style="font-size:.75rem;">{{ room.subject }}</span>
+    {% endif %}
+    {% if room.max_simultaneous > 1 %}
+      <span class="badge bg-info text-dark ms-1" style="font-size:.75rem;">до {{ room.max_simultaneous }} класів</span>
+    {% endif %}
+  </h4>
+
+  <div class="btn-group btn-group-sm me-auto" role="group">
+    <a href="?week=0" class="btn {% if week == 0 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень А</a>
+    <a href="?week=1" class="btn {% if week == 1 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень Б</a>
+  </div>
+
+  <div class="dropdown">
+    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+      <i class="bi bi-door-open me-1"></i>Інший кабінет
+    </button>
+    <ul class="dropdown-menu dropdown-menu-end" style="max-height:320px;overflow-y:auto;">
+      {% for r in all_rooms %}
+      <li>
+        <a class="dropdown-item {% if r.pk == room.pk %}active{% endif %}"
+           href="{% url 'scheduler:room_schedule' schedule.pk r.pk %}">
+          {{ r.name }}{% if r.subject %} <span class="text-muted small">({{ r.subject }})</span>{% endif %}
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<div class="table-card" style="overflow-x:auto;">
+  <table class="table table-bordered table-sm mb-0" style="min-width:520px;">
+    <thead>
+      <tr class="table-light">
+        <th style="width:50px;">#</th>
+        {% for day in days %}<th>{{ day }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in periods %}
+      {% with bp=bell_times|get_item:p %}
+      <tr>
+        <td class="text-center text-muted" style="white-space:nowrap;">
+          <div class="fw-semibold">{{ p|add:1 }}</div>
+          {% if bp %}
+            <div style="font-size:.7rem;">{{ bp.start_time|time:"H:i" }}</div>
+            <div style="font-size:.7rem;">{{ bp.end_time|time:"H:i" }}</div>
+          {% endif %}
+        </td>
+        {% for d in schedule.days_per_week|make_range %}
+        {% with slot_lessons=grid|get_item:d|get_item:p %}
+        <td {% if slot_lessons %}style="border-left:3px solid {{ slot_lessons.0.subject.color }};background:{{ slot_lessons.0.subject.color }}22;"{% endif %}>
+          {% for lesson in slot_lessons %}
+            {% if not forloop.first %}<hr class="my-1">{% endif %}
+            <div class="fw-semibold" style="font-size:.82rem;">{{ lesson.subject.short_name|default:lesson.subject.name }}</div>
+            <div class="text-muted" style="font-size:.75rem;">{{ lesson.school_class }}</div>
+            <div class="text-muted" style="font-size:.72rem;">{{ lesson.teacher }}</div>
+          {% endfor %}
+        </td>
+        {% endwith %}
+        {% endfor %}
+      </tr>
+      {% endwith %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

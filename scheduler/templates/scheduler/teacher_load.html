@@ -1,0 +1,185 @@
+{% extends "scheduler/base.html" %}
+{% block title %}Навантаження — {{ teacher }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="{% url 'scheduler:teacher_list' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h4 class="mb-0">{{ teacher }}</h4>
+  <span class="text-muted fs-6">— навантаження</span>
+  <span class="ms-2 badge bg-primary fs-6 fw-normal">{{ total_hours }} год/тиж</span>
+  <span class="text-muted small">макс. {{ teacher.max_lessons_per_day }} ур/день</span>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  {{ formset.management_form }}
+
+  <div class="d-flex flex-wrap gap-2 mb-3" id="subject-summary">
+    {% for st in subject_totals %}
+    <span class="badge rounded-pill bg-light text-dark border" style="font-size:.85rem;font-weight:500;">
+      {{ st.subject__name }} <span class="text-muted fw-normal">— {{ st.total }} год</span>
+    </span>
+    {% endfor %}
+  </div>
+
+  <div class="table-card mb-3">
+    <table class="table table-sm align-middle mb-0" id="load-table">
+      <thead>
+        <tr class="table-light">
+          <th>Предмет</th>
+          <th>Клас</th>
+          <th style="width:90px;">Год./тиж.</th>
+          <th style="width:80px;" title="Група для поділу класу. Порожньо = весь клас">Група</th>
+          <th style="width:40px;"></th>
+        </tr>
+      </thead>
+      <tbody id="formset-body">
+        {% for form in formset %}
+        <tr class="formset-row{% if form.instance.pk %} existing{% endif %}">
+          <td>
+            {{ form.id }}
+            {{ form.subject }}
+            {% if form.subject.errors %}<div class="text-danger small">{{ form.subject.errors.0 }}</div>{% endif %}
+          </td>
+          <td>
+            {{ form.school_class }}
+            {% if form.school_class.errors %}<div class="text-danger small">{{ form.school_class.errors.0 }}</div>{% endif %}
+          </td>
+          <td>
+            {{ form.hours_per_week }}
+            {% if form.hours_per_week.errors %}<div class="text-danger small">{{ form.hours_per_week.errors.0 }}</div>{% endif %}
+          </td>
+          <td>
+            {{ form.group }}
+            {% if form.group.errors %}<div class="text-danger small">{{ form.group.errors.0 }}</div>{% endif %}
+          </td>
+          <td class="text-center">
+            {% if form.instance.pk %}
+              <label class="d-flex align-items-center justify-content-center" title="Видалити">
+                {{ form.DELETE }}
+                <i class="bi bi-trash text-danger" style="pointer-events:none;"></i>
+              </label>
+            {% else %}
+              <button type="button" class="btn btn-sm btn-outline-secondary remove-row" title="Прибрати рядок">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="d-flex gap-2">
+    <button type="button" id="add-row" class="btn btn-outline-primary btn-sm">
+      <i class="bi bi-plus-lg me-1"></i>Додати рядок
+    </button>
+    <button type="submit" class="btn btn-primary btn-sm">
+      <i class="bi bi-check-lg me-1"></i>Зберегти
+    </button>
+    <a href="{% url 'scheduler:teacher_list' %}" class="btn btn-outline-secondary btn-sm">Скасувати</a>
+  </div>
+</form>
+
+{# Прихований шаблон для нових рядків #}
+<table style="display:none;">
+  <tbody>
+    <tr id="empty-row" class="formset-row">
+      {{ formset.empty_form.id }}
+      <td>{{ formset.empty_form.subject }}</td>
+      <td>{{ formset.empty_form.school_class }}</td>
+      <td>{{ formset.empty_form.hours_per_week }}</td>
+      <td>{{ formset.empty_form.group }}</td>
+      <td class="text-center">
+        <button type="button" class="btn btn-sm btn-outline-secondary remove-row" title="Прибрати рядок">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const totalForms = document.getElementById('id_teachersubject_set-TOTAL_FORMS');
+  const body = document.getElementById('formset-body');
+  const emptyRow = document.getElementById('empty-row');
+  const badge = document.querySelector('.badge.bg-primary');
+  const summary = document.getElementById('subject-summary');
+
+  function recalcTotal() {
+    let sum = 0;
+    body.querySelectorAll('.formset-row').forEach(tr => {
+      const del = tr.querySelector('input[id$="-DELETE"]');
+      if (del && del.checked) return;
+      const h = tr.querySelector('input[id$="-hours_per_week"]');
+      if (h) sum += parseFloat(h.value) || 0;
+    });
+    if (badge) badge.textContent = sum + ' год/тиж';
+  }
+
+  function recalcSubjects() {
+    const totals = {};
+    body.querySelectorAll('.formset-row').forEach(tr => {
+      const del = tr.querySelector('input[id$="-DELETE"]');
+      if (del && del.checked) return;
+      const sel = tr.querySelector('select[id$="-subject"]');
+      const h = tr.querySelector('input[id$="-hours_per_week"]');
+      if (!sel || !h) return;
+      const name = sel.options[sel.selectedIndex]?.text?.trim();
+      const hours = parseFloat(h.value) || 0;
+      if (name && name !== '---------' && hours > 0) {
+        totals[name] = (totals[name] || 0) + hours;
+      }
+    });
+    summary.innerHTML = Object.keys(totals).sort().map(name =>
+      `<span class="badge rounded-pill bg-light text-dark border" style="font-size:.85rem;font-weight:500;">
+        ${name} <span class="text-muted fw-normal">— ${totals[name]} год</span>
+      </span>`
+    ).join('');
+  }
+
+  function recalc() { recalcTotal(); recalcSubjects(); }
+
+  body.addEventListener('input', e => {
+    if (e.target.matches('input[id$="-hours_per_week"]') || e.target.matches('select[id$="-subject"]')) recalc();
+  });
+  body.addEventListener('change', e => {
+    if (e.target.matches('select[id$="-subject"]')) recalc();
+  });
+
+  // Приховати чекбокси DELETE (замінено іконкою у trash-label)
+  document.querySelectorAll('input[id$="-DELETE"]').forEach(cb => {
+    cb.style.display = 'none';
+    cb.closest('label')?.addEventListener('click', function (e) {
+      e.preventDefault();
+      cb.checked = !cb.checked;
+      this.closest('tr').style.opacity = cb.checked ? '0.35' : '1';
+      recalc();
+    });
+  });
+
+  document.getElementById('add-row').addEventListener('click', function () {
+    const idx = parseInt(totalForms.value);
+    const html = emptyRow.innerHTML.replace(/__prefix__/g, idx);
+    const tr = document.createElement('tr');
+    tr.className = 'formset-row';
+    tr.innerHTML = html;
+    body.appendChild(tr);
+    totalForms.value = idx + 1;
+    tr.querySelector('.remove-row')?.addEventListener('click', () => { tr.remove(); recalc(); });
+  });
+
+  document.querySelectorAll('.remove-row').forEach(btn => {
+    btn.addEventListener('click', function () { this.closest('tr').remove(); recalc(); });
+  });
+
+  recalc();
+})();
+</script>
+{% endblock %}
