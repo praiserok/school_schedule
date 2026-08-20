@@ -11,11 +11,6 @@
   <h4 class="mb-0">{{ schedule.name }}</h4>
   {% if schedule.is_active %}<span class="badge bg-success">Активний</span>{% endif %}
 
-  <div class="btn-group btn-group-sm me-auto" role="group" aria-label="Тиждень">
-    <a href="?week=0" class="btn {% if week == 0 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень А</a>
-    <a href="?week=1" class="btn {% if week == 1 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень Б</a>
-  </div>
-
   <button id="edit-toggle" class="btn btn-outline-warning btn-sm">
     <i class="bi bi-pencil-square me-1"></i>Редагувати
   </button>
@@ -96,26 +91,77 @@
             {% endif %}
           </td>
           {% for d in schedule.days_per_week|make_range %}
-          {% with lesson=cls_grid|get_item:d|get_item:p %}
+          {% with cell=cls_grid|get_item:d|get_item:p %}
+          {% if cell and cell.kind == 'alt' %}
+          {# Чередуючий урок: різні предмети у тиждень А і Б — показуємо обидва #}
           <td class="sch-cell"
               data-cls="{{ cls.pk }}"
               data-day="{{ d }}"
               data-period="{{ p }}"
-              {% if lesson %}
+              style="padding:2px;">
+            {% if cell.week_a %}
+            <div style="border-left:3px solid {{ cell.week_a.subject.color }};background:{{ cell.week_a.subject.color }}22;padding:3px 5px;margin-bottom:2px;border-radius:3px;">
+              <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
+              <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_a.subject.short_name|default:cell.week_a.subject.name }}</span>
+              <div style="font-size:.72rem;">
+                <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_a.teacher_id %}"
+                   class="text-muted text-decoration-none">{{ cell.week_a.teacher }}</a>
+              </div>
+            </div>
+            {% endif %}
+            {% if cell.week_b %}
+            <div style="border-left:3px solid {{ cell.week_b.subject.color }};background:{{ cell.week_b.subject.color }}22;padding:3px 5px;border-radius:3px;">
+              <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
+              <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_b.subject.short_name|default:cell.week_b.subject.name }}</span>
+              <div style="font-size:.72rem;">
+                <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_b.teacher_id %}"
+                   class="text-muted text-decoration-none">{{ cell.week_b.teacher }}</a>
+              </div>
+            </div>
+            {% endif %}
+          </td>
+          {% else %}
+          {# Звичайний урок (або порожня комірка) #}
+          {% with lesson=cell.primary %}
+          <td class="sch-cell"
+              data-cls="{{ cls.pk }}"
+              data-day="{{ d }}"
+              data-period="{{ p }}"
+              {% if lesson and not cell.extra %}
                 data-lid="{{ lesson.pk }}"
                 style="border-left:3px solid {{ lesson.subject.color }};background:{{ lesson.subject.color }}22;"
               {% endif %}>
             {% if lesson %}
-              <div class="fw-semibold" style="font-size:.82rem;">{{ lesson.subject.short_name|default:lesson.subject.name }}</div>
-              <div style="font-size:.75rem;">
-                <a href="{% url 'scheduler:teacher_schedule' schedule.pk lesson.teacher_id %}"
-                   class="text-muted text-decoration-none">{{ lesson.teacher }}</a>
+              {# Кожен урок — окремий .sch-lesson блок з data-lid для точного вибору #}
+              <div class="sch-lesson" data-lid="{{ lesson.pk }}"
+                   {% if cell.extra %}style="border-left:3px solid {{ lesson.subject.color }};background:{{ lesson.subject.color }}22;padding:2px 4px;border-radius:3px;margin-bottom:2px;"{% endif %}>
+                <div class="fw-semibold" style="font-size:.82rem;">{{ lesson.subject.short_name|default:lesson.subject.name }}</div>
+                <div style="font-size:.75rem;">
+                  {% if lesson.group %}<span class="badge text-bg-secondary" style="font-size:.58rem;vertical-align:middle;">гр.{{ lesson.group }}</span> {% endif %}
+                  <a href="{% url 'scheduler:teacher_schedule' schedule.pk lesson.teacher_id %}"
+                     class="text-muted text-decoration-none">{{ lesson.teacher }}</a>
+                </div>
+                {% if lesson.room %}
+                  <div class="text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</div>
+                {% endif %}
               </div>
-              {% if lesson.room %}
-                <div class="text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</div>
+              {% if cell.extra %}
+              {# Друга група — окремий блок з власним data-lid #}
+              <div class="sch-lesson" data-lid="{{ cell.extra.pk }}"
+                   style="font-size:.75rem;border-left:3px solid {{ cell.extra.subject.color }};background:{{ cell.extra.subject.color }}22;padding:2px 4px;border-radius:3px;">
+                <span class="badge text-bg-secondary" style="font-size:.58rem;vertical-align:middle;">гр.{{ cell.extra.group|default:"2" }}</span>
+                {% if cell.extra.subject_id != lesson.subject_id %}
+                <span class="fw-semibold" style="font-size:.8rem;">{{ cell.extra.subject.short_name|default:cell.extra.subject.name }}</span>
+                {% endif %}
+                <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.extra.teacher_id %}"
+                   class="text-muted text-decoration-none">{{ cell.extra.teacher }}</a>
+                {% if cell.extra.room %}<span class="text-muted"> каб. {{ cell.extra.room }}</span>{% endif %}
+              </div>
               {% endif %}
             {% endif %}
           </td>
+          {% endwith %}
+          {% endif %}
           {% endwith %}
           {% endfor %}
         </tr>
@@ -136,17 +182,18 @@
   const MOVE_URL = "{% url 'scheduler:lesson_move' schedule.pk %}";
   const CSRF = "{{ csrf_token }}";
 
-  let editMode = false;
-  let selCell = null;   // виділена td
-  let selLid  = null;   // lesson pk
-  let selCls  = null;   // class pk
+  let editMode  = false;
+  let selCell   = null;   // виділена td
+  let selLidDiv = null;   // виділений .sch-lesson div (null якщо single-lesson)
+  let selLid    = null;   // lesson pk
+  let selCls    = null;   // class pk
 
-  const toggleBtn  = document.getElementById('edit-toggle');
-  const hint       = document.getElementById('edit-hint');
-  const selInfo    = document.getElementById('selected-info');
-  const toastEl    = document.getElementById('err-toast');
-  const toastBody  = document.getElementById('err-toast-body');
-  const bsToast    = new bootstrap.Toast(toastEl, {delay: 5000});
+  const toggleBtn = document.getElementById('edit-toggle');
+  const hint      = document.getElementById('edit-hint');
+  const selInfo   = document.getElementById('selected-info');
+  const toastEl   = document.getElementById('err-toast');
+  const toastBody = document.getElementById('err-toast-body');
+  const bsToast   = new bootstrap.Toast(toastEl, {delay: 5000});
 
   // ── Режим редагування ────────────────────────────────────────────────────
   toggleBtn.addEventListener('click', function () {
@@ -158,40 +205,53 @@
       : '<i class="bi bi-pencil-square me-1"></i>Редагувати';
     hint.classList.toggle('d-none', !editMode);
     clearSel();
-    document.querySelectorAll('.sch-cell').forEach(td => {
-      td.style.cursor = editMode ? 'pointer' : '';
+    document.querySelectorAll('.sch-cell, .sch-lesson').forEach(el => {
+      el.style.cursor = editMode ? 'pointer' : '';
     });
   });
 
   // ── Кліки по комірках ────────────────────────────────────────────────────
   document.querySelectorAll('.sch-cell').forEach(td => {
-    td.addEventListener('click', function () {
+    td.addEventListener('click', function (e) {
       if (!editMode) return;
 
-      const lid = this.dataset.lid || null;
+      // Якщо клікнули на конкретний .sch-lesson — беремо його lid,
+      // інакше беремо data-lid самої td (single-lesson комірка).
+      const lessonDiv = e.target.closest('.sch-lesson');
+      const lid = (lessonDiv && lessonDiv.dataset.lid) || this.dataset.lid || null;
       const cls = this.dataset.cls;
       const day = this.dataset.day;
       const per = this.dataset.period;
 
-      // Повторний клік по виділеній → скасувати
-      if (selCell === this) { clearSel(); return; }
+      // Повторний клік по тому ж уроку → скасувати
+      if (selCell === this && selLid === lid) { clearSel(); return; }
 
       if (!selCell) {
         // Перший клік — виділяємо (тільки якщо є урок)
         if (!lid) return;
-        selCell = this;
-        selLid  = lid;
-        selCls  = cls;
-        this.style.outline = '3px solid #f0ad4e';
-        this.style.outlineOffset = '-3px';
-        selInfo.textContent = 'Урок виділено — клікніть на цільову комірку';
+        selCell   = this;
+        selLid    = lid;
+        selLidDiv = lessonDiv;
+        selCls    = cls;
+        // Підсвічуємо конкретний div або всю комірку
+        if (lessonDiv) {
+          lessonDiv.style.outline      = '3px solid #f0ad4e';
+          lessonDiv.style.outlineOffset = '-2px';
+          lessonDiv.style.borderRadius  = '3px';
+        } else {
+          this.style.outline      = '3px solid #f0ad4e';
+          this.style.outlineOffset = '-3px';
+        }
+        selInfo.textContent = 'Виділено — клікніть на ціль (або конкретний урок у комірці)';
       } else {
         // Другий клік — переміщення або обмін (тільки в тому ж класі)
         if (cls !== selCls) {
           showError('Можна переміщати тільки в межах одного класу');
           return;
         }
-        doMove(selLid, +day, +per);
+        // targetLid — конкретний урок у цільовій комірці (якщо клік по .sch-lesson)
+        const targetLid = lessonDiv ? lessonDiv.dataset.lid : null;
+        doMove(selLid, +day, +per, targetLid);
       }
     });
   });
@@ -207,11 +267,12 @@
   });
 
   // ── Логіка переміщення ───────────────────────────────────────────────────
-  function doMove(lid, newDay, newPeriod) {
+  function doMove(lid, newDay, newPeriod, targetLid) {
     fetch(MOVE_URL, {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
-      body: JSON.stringify({lesson_id: lid, new_day: newDay, new_period: newPeriod}),
+      body: JSON.stringify({lesson_id: lid, new_day: newDay, new_period: newPeriod,
+                            target_lid: targetLid || null}),
     })
     .then(r => r.json())
     .then(data => {
@@ -226,11 +287,14 @@
   }
 
   function clearSel() {
-    if (selCell) {
-      selCell.style.outline = '';
+    if (selLidDiv) {
+      selLidDiv.style.outline      = '';
+      selLidDiv.style.outlineOffset = '';
+    } else if (selCell) {
+      selCell.style.outline      = '';
       selCell.style.outlineOffset = '';
     }
-    selCell = selLid = selCls = null;
+    selCell = selLid = selCls = selLidDiv = null;
     selInfo.textContent = '';
   }
 

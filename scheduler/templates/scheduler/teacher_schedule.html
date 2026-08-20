@@ -10,11 +10,6 @@
   <h4 class="mb-0">{{ teacher }}</h4>
   {% if schedule.is_active %}<span class="badge bg-success">Активний</span>{% endif %}
 
-  <div class="btn-group btn-group-sm me-auto" role="group">
-    <a href="?week=0" class="btn {% if week == 0 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень А</a>
-    <a href="?week=1" class="btn {% if week == 1 %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Тиждень Б</a>
-  </div>
-
   {# Перемикач вчителів #}
   <div class="dropdown">
     <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
@@ -53,16 +48,40 @@
           {% endif %}
         </td>
         {% for d in schedule.days_per_week|make_range %}
-        {% with lesson=grid|get_item:d|get_item:p %}
+        {% with cell=grid|get_item:d|get_item:p %}
+        {% if cell and cell.kind == 'alt' %}
+        <td style="padding:2px;">
+          {% if cell.week_a %}
+          <div style="border-left:3px solid {{ cell.week_a.subject.color }};background:{{ cell.week_a.subject.color }}22;padding:3px 5px;margin-bottom:2px;border-radius:3px;">
+            <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
+            <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_a.subject.short_name|default:cell.week_a.subject.name }}</span>
+            <div class="text-muted" style="font-size:.72rem;">{{ cell.week_a.school_class }}</div>
+          </div>
+          {% endif %}
+          {% if cell.week_b %}
+          <div style="border-left:3px solid {{ cell.week_b.subject.color }};background:{{ cell.week_b.subject.color }}22;padding:3px 5px;border-radius:3px;">
+            <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
+            <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_b.subject.short_name|default:cell.week_b.subject.name }}</span>
+            <div class="text-muted" style="font-size:.72rem;">{{ cell.week_b.school_class }}</div>
+          </div>
+          {% endif %}
+        </td>
+        {% else %}
+        {% with lesson=cell.lesson %}
         <td {% if lesson %}style="border-left:3px solid {{ lesson.subject.color }};background:{{ lesson.subject.color }}22;"{% endif %}>
           {% if lesson %}
             <div class="fw-semibold" style="font-size:.82rem;">{{ lesson.subject.short_name|default:lesson.subject.name }}</div>
-            <div class="text-muted" style="font-size:.75rem;">{{ lesson.school_class }}</div>
+            <div class="text-muted" style="font-size:.75rem;">
+              {{ lesson.school_class }}
+              {% if lesson.group %}<span class="badge text-bg-secondary ms-1" style="font-size:.58rem;">гр.{{ lesson.group }}</span>{% endif %}
+            </div>
             {% if lesson.room %}
               <div class="text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</div>
             {% endif %}
           {% endif %}
         </td>
+        {% endwith %}
+        {% endif %}
         {% endwith %}
         {% endfor %}
       </tr>

@@ -540,10 +540,19 @@ def _validate_move(schedule, lesson, new_day, new_period, swap=None):
     # 3. Конфлікт класу (для обміну в тому ж класі слот не змінюється — пропускаємо)
     same_class_swap = swap and swap.school_class_id == lesson.school_class_id
     if not same_class_swap:
-        if Lesson.objects.filter(
+        existing_qs = Lesson.objects.filter(
             schedule=schedule, school_class=lesson.school_class, week=week, day=new_day, period=new_period
-        ).exclude(pk__in=exclude).exists():
-            errors.append(f'Клас {lesson.school_class} вже має урок в цей час')
+        ).exclude(pk__in=exclude)
+        if lesson.group:
+            # Груповий урок: дозволяємо іншу групу в тому ж слоті; забороняємо лише
+            # якщо там є цілокласний урок або та сама група вже є.
+            if existing_qs.filter(group__isnull=True).exists():
+                errors.append(f'Клас {lesson.school_class}: цілокласний урок вже є в цей час')
+            elif existing_qs.filter(group=lesson.group).exists():
+                errors.append(f'Клас {lesson.school_class}: група {lesson.group} вже має урок в цей час')
+        else:
+            if existing_qs.exists():
+                errors.append(f'Клас {lesson.school_class} вже має урок в цей час')
 
     # 4. Максимум уроків вчителя на день
     if lesson.day != new_day:
@@ -553,22 +562,14 @@ def _validate_move(schedule, lesson, new_day, new_period, swap=None):
         if cnt > lesson.teacher.max_lessons_per_day:
             errors.append(f'Вчитель {lesson.teacher}: ліміт {lesson.teacher.max_lessons_per_day} ур/день буде перевищено')
 
-    # 5. Кабінет
-    if lesson.room_id:
-        busy_count = Lesson.objects.filter(
-            schedule=schedule, room=lesson.room, week=week, day=new_day, period=new_period
-        ).exclude(pk__in=exclude).count()
-        if busy_count >= lesson.room.max_simultaneous:
-            errors.append(f'Кабінет {lesson.room} вже зайнятий в цей час')
-
-    # 6. Без вікон — не перевіряємо для обміну в тому ж класі (набір слотів не змінюється)
+    # 5. Без вікон — не перевіряємо для обміну в тому ж класі (набір слотів не змінюється)
     if not same_class_swap:
-        # Новий день: додаємо new_period
-        new_day_periods = sorted(
+        # Новий день: додаємо new_period (set — щоб уникнути дублів, коли в слоті вже є інша група)
+        new_day_periods = sorted(set(
             list(Lesson.objects.filter(
                 schedule=schedule, school_class=lesson.school_class, week=week, day=new_day
             ).exclude(pk__in=exclude).values_list('period', flat=True)) + [new_period]
-        )
+        ))
         if new_day_periods[0] != 0 or new_day_periods != list(range(len(new_day_periods))):
             errors.append(f'Клас {lesson.school_class}: виникне вікно в {new_day + 1}-й день')
 
@@ -601,27 +602,75 @@ def lesson_move(request, pk):
     if lesson.day == new_day and lesson.period == new_period:
         return JsonResponse({'ok': True})
 
-    # Чи є в цільовій комірці урок того ж класу в тому ж тижні (обмін)
-    swap = Lesson.objects.filter(
-        schedule=schedule, school_class=lesson.school_class,
-        week=lesson.week, day=new_day, period=new_period
-    ).first()
+    from django.db import transaction
+
+    old_day, old_period = lesson.day, lesson.period
+
+    # "Family" = всі записи того ж уроку по всіх тижнях.
+    # Базовий урок (xb=1) зберігається двома рядками: week=0 і week=1 в одному слоті.
+    # Рухаємо одразу всю сім'ю — інакше два тижні розповзуться в різні слоти.
+    lesson_family_qs = Lesson.objects.filter(
+        schedule=schedule,
+        school_class=lesson.school_class,
+        teacher=lesson.teacher,
+        subject=lesson.subject,
+        group=lesson.group,
+        day=old_day,
+        period=old_period,
+    )
+
+    # Знаходимо "swap": якщо передано target_lid — беремо конкретний урок (для вибору
+    # групи з двогрупової комірки). Інакше — перший урок у цільовій комірці.
+    target_lid = data.get('target_lid')
+    if target_lid:
+        try:
+            swap = Lesson.objects.get(pk=int(target_lid), schedule=schedule)
+            if (swap.day != new_day or swap.period != new_period
+                    or swap.school_class_id != lesson.school_class_id):
+                return JsonResponse({'ok': False, 'errors': ['Некоректний цільовий урок']}, status=400)
+        except (Lesson.DoesNotExist, ValueError, TypeError):
+            return JsonResponse({'ok': False, 'errors': ['Урок не знайдено']}, status=400)
+    else:
+        # Якщо target_lid не вказано — це чисте переміщення (move), а не обмін (swap).
+        # Урок просто переноситься в новий слот; будь-які існуючі уроки там залишаються.
+        swap = None
 
     errors = _validate_move(schedule, lesson, new_day, new_period, swap)
     if swap:
-        errors += _validate_move(schedule, swap, lesson.day, lesson.period, lesson)
-
+        errors += _validate_move(schedule, swap, old_day, old_period, lesson)
     if errors:
         return JsonResponse({'ok': False, 'errors': errors})
 
-    old_day, old_period = lesson.day, lesson.period
+    swap_family_qs = None
     if swap:
-        lesson.day, lesson.period = new_day, new_period
-        swap.day, swap.period = old_day, old_period
-        swap.save()
-    else:
-        lesson.day, lesson.period = new_day, new_period
-    lesson.save()
+        # Сім'я swap — всі тижні тієї ж (teacher, subject, group) в цільовому слоті
+        swap_family_qs = Lesson.objects.filter(
+            schedule=schedule,
+            school_class=lesson.school_class,
+            teacher=swap.teacher,
+            subject=swap.subject,
+            group=swap.group,
+            day=new_day,
+            period=new_period,
+        )
+
+    # Зберігаємо pk ДО будь-яких оновлень — querysets ледачі, і після step 1
+    # (swap → temp) фільтр по old day/period вже нічого не знайде в step 3.
+    lesson_pks = list(lesson_family_qs.values_list('pk', flat=True))
+    swap_pks = list(swap_family_qs.values_list('pk', flat=True)) if swap_family_qs is not None else []
+
+    # Three-step atomic swap через тимчасовий слот поза діапазоном розкладу.
+    # SQLite перевіряє UNIQUE після кожного рядка, тому послідовні save() однакового
+    # вчителя дають IntegrityError. filter().update() — прямий SQL без ORM-перевірок,
+    # а тимчасовий (D, P) гарантовано вільний (поза 0..D-1 / 0..P-1).
+    D = schedule.days_per_week
+    P = schedule.lessons_per_day
+    with transaction.atomic():
+        if swap_pks:
+            Lesson.objects.filter(pk__in=swap_pks).update(day=D, period=P)           # step 1: swap → temp
+        Lesson.objects.filter(pk__in=lesson_pks).update(day=new_day, period=new_period)  # step 2: lesson → ціль
+        if swap_pks:
+            Lesson.objects.filter(pk__in=swap_pks).update(day=old_day, period=old_period)  # step 3: swap → джерело
 
     return JsonResponse({'ok': True})
 
@@ -640,15 +689,17 @@ def schedule_generate(request, pk):
 def room_schedule(request, schedule_pk, room_pk):
     schedule = get_object_or_404(Schedule, pk=schedule_pk)
     room = get_object_or_404(Room, pk=room_pk)
-    week = int(request.GET.get('week', 0))
-    lessons = schedule.lessons.filter(room=room, week=week).select_related('school_class', 'subject', 'teacher')
+    lessons = schedule.lessons.filter(room=room).select_related('school_class', 'subject', 'teacher')
     days = DAYS_FULL[:schedule.days_per_week]
-    periods = range(schedule.lessons_per_day)
+    D = schedule.days_per_week
+    P = schedule.lessons_per_day
+    periods = range(P)
 
-    # slot → list (може бути >1 при shared room)
-    grid = {d: {p: [] for p in periods} for d in range(schedule.days_per_week)}
+    # grid[d][p] → list of lessons (може бути >1 при shared room або чергуванні А/Б)
+    grid = {d: {p: [] for p in range(P)} for d in range(D)}
     for lesson in lessons:
-        grid[lesson.day][lesson.period].append(lesson)
+        if lesson.day < D and lesson.period < P:
+            grid[lesson.day][lesson.period].append(lesson)
 
     bell_times = {}
     if schedule.bell_schedule_id:
@@ -666,21 +717,44 @@ def room_schedule(request, schedule_pk, room_pk):
         'periods': periods,
         'grid': grid,
         'bell_times': bell_times,
-        'week': week,
     })
 
 
 def teacher_schedule(request, schedule_pk, teacher_pk):
     schedule = get_object_or_404(Schedule, pk=schedule_pk)
     teacher = get_object_or_404(Teacher, pk=teacher_pk)
-    week = int(request.GET.get('week', 0))
-    lessons = schedule.lessons.filter(teacher=teacher, week=week).select_related('school_class', 'subject', 'room')
+    lessons = schedule.lessons.filter(teacher=teacher).select_related('school_class', 'subject', 'room')
     days = DAYS_FULL[:schedule.days_per_week]
-    periods = range(schedule.lessons_per_day)
+    D = schedule.days_per_week
+    P = schedule.lessons_per_day
+    periods = range(P)
 
-    grid = {d: {p: None for p in periods} for d in range(schedule.days_per_week)}
+    # grid[d][p]: None | {'kind':'regular','lesson':l} | {'kind':'alt','week_a':l,'week_b':l}
+    raw = {d: {p: [] for p in range(P)} for d in range(D)}
     for lesson in lessons:
-        grid[lesson.day][lesson.period] = lesson
+        if lesson.day < D and lesson.period < P:
+            raw[lesson.day][lesson.period].append(lesson)
+
+    grid = {}
+    for d in range(D):
+        grid[d] = {}
+        for p in range(P):
+            cell = raw[d][p]
+            if not cell:
+                grid[d][p] = None
+                continue
+            week_a = [l for l in cell if l.week == 0]
+            week_b = [l for l in cell if l.week == 1]
+            subj_a = {l.subject_id for l in week_a}
+            subj_b = {l.subject_id for l in week_b}
+            if not week_b or subj_a == subj_b:
+                grid[d][p] = {'kind': 'regular', 'lesson': (week_a or week_b)[0]}
+            else:
+                grid[d][p] = {
+                    'kind': 'alt',
+                    'week_a': week_a[0] if week_a else None,
+                    'week_b': week_b[0] if week_b else None,
+                }
 
     bell_times = {}
     if schedule.bell_schedule_id:
@@ -698,32 +772,69 @@ def teacher_schedule(request, schedule_pk, teacher_pk):
         'periods': periods,
         'grid': grid,
         'bell_times': bell_times,
-        'week': week,
     })
+
+
+def _build_display_grid(lessons, classes, D, P):
+    """
+    Повертає grid[class_pk][day][period] — dict з ключами:
+      None                          → порожня комірка
+      {'kind':'regular', 'primary': lesson, 'extra': lesson|None}
+                                    → звичайний урок (або два записи однієї групи)
+      {'kind':'alt', 'week_a': lesson|None, 'week_b': lesson|None}
+                                    → уроки що чергуються по тижнях
+    """
+    raw = {sc.pk: {d: {p: [] for p in range(P)} for d in range(D)} for sc in classes}
+    for lesson in lessons:
+        if lesson.day < D and lesson.period < P:
+            raw[lesson.school_class_id][lesson.day][lesson.period].append(lesson)
+
+    grid = {}
+    for sc in classes:
+        grid[sc.pk] = {}
+        for d in range(D):
+            grid[sc.pk][d] = {}
+            for p in range(P):
+                cell = raw[sc.pk][d][p]
+                if not cell:
+                    grid[sc.pk][d][p] = None
+                    continue
+                week_a = [l for l in cell if l.week == 0]
+                week_b = [l for l in cell if l.week == 1]
+                subj_a = {l.subject_id for l in week_a}
+                subj_b = {l.subject_id for l in week_b}
+                if week_a and week_b and subj_a == subj_b:
+                    # Однаковий предмет обидва тижні → звичайний (базовий) урок
+                    primary = week_a[0]
+                    extra = week_a[1] if len(week_a) > 1 else None
+                    grid[sc.pk][d][p] = {'kind': 'regular', 'primary': primary, 'extra': extra}
+                else:
+                    # Або лише тиждень А (черговий 0.5г), або різні предмети → alt
+                    grid[sc.pk][d][p] = {
+                        'kind': 'alt',
+                        'week_a': week_a[0] if week_a else None,
+                        'week_b': week_b[0] if week_b else None,
+                    }
+    return grid
 
 
 def schedule_view(request, pk):
     schedule = get_object_or_404(Schedule, pk=pk)
-    week = int(request.GET.get('week', 0))
-    lessons = schedule.lessons.filter(week=week).select_related('school_class', 'subject', 'teacher', 'room')
+    lessons = schedule.lessons.select_related('school_class', 'subject', 'teacher', 'room').order_by('week', 'group')
     classes = SchoolClass.objects.all()
-    days = DAYS_FULL[:schedule.days_per_week]
-    periods = range(schedule.lessons_per_day)
+    D = schedule.days_per_week
+    P = schedule.lessons_per_day
+    days = DAYS_FULL[:D]
+    periods = range(P)
 
-    # Build grid: class → day → period → lesson
-    grid = {}
-    for sc in classes:
-        grid[sc.pk] = {d: {p: None for p in periods} for d in range(schedule.days_per_week)}
-    for lesson in lessons:
-        if lesson.day < schedule.days_per_week and lesson.period < schedule.lessons_per_day:
-            grid[lesson.school_class_id][lesson.day][lesson.period] = lesson
+    grid = _build_display_grid(lessons, classes, D, P)
 
     bell_times = {}
     if schedule.bell_schedule_id:
         bell_times = {
             bp.number - 1: bp
             for bp in BellPeriod.objects.filter(bell_schedule_id=schedule.bell_schedule_id)
-        }  # 0-based
+        }
 
     return render(request, 'scheduler/schedule_view.html', {
         'schedule': schedule,
@@ -733,5 +844,4 @@ def schedule_view(request, pk):
         'grid': grid,
         'all_teachers': Teacher.objects.all(),
         'bell_times': bell_times,
-        'week': week,
     })

@@ -188,11 +188,12 @@ class Lesson(models.Model):
     day = models.PositiveSmallIntegerField()      # 0=пн … 4=пт
     period = models.PositiveSmallIntegerField()   # номер уроку (0-based)
     week = models.PositiveSmallIntegerField(default=0, db_index=True)  # 0=тиждень А, 1=тиждень Б
+    group = models.PositiveSmallIntegerField(null=True, blank=True)    # None = весь клас
     is_double = models.BooleanField(default=False)  # True — перший урок пари
 
     class Meta:
         unique_together = [
-            ('schedule', 'school_class', 'day', 'period', 'week'),
+            ('schedule', 'school_class', 'teacher', 'day', 'period', 'week'),
             ('schedule', 'teacher', 'day', 'period', 'week'),
         ]
         ordering = ['day', 'period', 'school_class']
