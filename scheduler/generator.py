@@ -1019,12 +1019,14 @@ def generate(schedule_id: int) -> tuple:
     #    This spreads them so each day has at most one g1+g2 pair, leaving
     #    both edge slots free for that pair.
     #
-    # 3. EDGE_WEIGHT (10): V-shaped edge reward for each unpaired lesson.
+    # 3. EDGE_WEIGHT (100): V-shaped edge reward for each unpaired lesson.
     #    Reward = (P-1 − 2·min(p, P-1−p)) — max at period 0 and P−1, zero
     #    at centre.  Naturally pushes g1 → period 0, g2 → period P−1.
+    #    Must be large enough that the 2-point gap between adjacent periods
+    #    outweighs any residual slack in FEASIBLE (non-OPTIMAL) solutions.
     PAIR_WEIGHT    = 1000
     CLUSTER_WEIGHT = 100
-    EDGE_WEIGHT    = 10
+    EDGE_WEIGHT    = 100
 
     all_obj_vars: list = list(obj_same_day) + list(obj_anchor)
     all_obj_wts:  list = ([PAIR_WEIGHT] * len(obj_same_day)
@@ -1073,20 +1075,37 @@ def generate(schedule_id: int) -> tuple:
                         all_obj_wts.append(CLUSTER_WEIGHT)
 
         # --- tier 3: edge reward ---
+        # Binary reward: only period 0 (always first) or the ACTUAL last occupied
+        # period of the class day earns EDGE_WEIGHT.  The old V-shaped formula was
+        # wrong: for P=7 it scores p=1 (reward=4) higher than p=4 (reward=2), so
+        # when a class has 5 lessons (0–4) the solver preferred ур.2 over the real
+        # last period ур.5 — the opposite of what we want.
         for a_i in actually_unpaired:
+            a = assignments[a_i]
+            slot_A = cls_slot_A.get(a.school_class_id)
+            if slot_A is None:
+                continue
             for d in range(D):
-                for p in range(P):
-                    reward = (P - 1) - 2 * min(p, P - 1 - p)
-                    if reward > 0:
-                        all_obj_vars.append(xb[a_i, d, p])
-                        all_obj_wts.append(reward * EDGE_WEIGHT)
+                # Period 0 — always the first lesson of the day
+                all_obj_vars.append(xb[a_i, d, 0])
+                all_obj_wts.append(EDGE_WEIGHT)
+                # Periods 1..P-2 — reward only if this is the actual last of the day
+                # (no class lesson at period p+1 → this lesson is last)
+                for p in range(1, P - 1):
+                    is_last = model.new_bool_var(f'el_{a_i}_{d}_{p}')
+                    model.add_min_equality(is_last, [xb[a_i, d, p], slot_A[d, p + 1].Not()])
+                    all_obj_vars.append(is_last)
+                    all_obj_wts.append(EDGE_WEIGHT)
+                # Period P-1 — always the last possible slot
+                all_obj_vars.append(xb[a_i, d, P - 1])
+                all_obj_wts.append(EDGE_WEIGHT)
 
     if all_obj_vars:
         model.maximize(cp_model.LinearExpr.WeightedSum(all_obj_vars, all_obj_wts))
 
     # -------------------------------------------------------------------------
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 25.0
+    solver.parameters.max_time_in_seconds = 40.0
     solver.parameters.num_search_workers = 8
     solver.parameters.log_search_progress = False
 
