@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib import messages
 from django.views.decorators.http import require_POST
@@ -695,11 +697,39 @@ def room_schedule(request, schedule_pk, room_pk):
     P = schedule.lessons_per_day
     periods = range(P)
 
-    # grid[d][p] → list of lessons (може бути >1 при shared room або чергуванні А/Б)
-    grid = {d: {p: [] for p in range(P)} for d in range(D)}
+    # Collect raw lessons per slot
+    raw: dict = defaultdict(list)
     for lesson in lessons:
         if lesson.day < D and lesson.period < P:
-            grid[lesson.day][lesson.period].append(lesson)
+            raw[lesson.day, lesson.period].append(lesson)
+
+    # grid[d][p] → list of entries, one per class in the slot.
+    # Each entry: {'kind': 'regular'|'alt'|'week_a'|'week_b',
+    #              'lesson': l,          ← for regular/week_a/week_b
+    #              'week_a': l|None,     ← for alt
+    #              'week_b': l|None}     ← for alt
+    grid = {d: {p: [] for p in range(P)} for d in range(D)}
+    for d in range(D):
+        for p in range(P):
+            cell = raw.get((d, p), [])
+            if not cell:
+                continue
+            by_class: dict = defaultdict(list)
+            for l in cell:
+                by_class[l.school_class_id].append(l)
+            entries = []
+            for ls in by_class.values():
+                week_a = next((l for l in ls if l.week == 0), None)
+                week_b = next((l for l in ls if l.week == 1), None)
+                if week_a and week_b and week_a.subject_id == week_b.subject_id:
+                    entries.append({'kind': 'regular', 'lesson': week_a})
+                elif week_a and week_b:
+                    entries.append({'kind': 'alt', 'week_a': week_a, 'week_b': week_b})
+                elif week_a:
+                    entries.append({'kind': 'week_a', 'lesson': week_a})
+                else:
+                    entries.append({'kind': 'week_b', 'lesson': week_b})
+            grid[d][p] = entries
 
     bell_times = {}
     if schedule.bell_schedule_id:

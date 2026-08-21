@@ -54,18 +54,54 @@
           {% endif %}
         </td>
         {% for d in schedule.days_per_week|make_range %}
-        {% with slot_lessons=grid|get_item:d|get_item:p %}
-        <td {% if slot_lessons %}style="border-left:3px solid {{ slot_lessons.0.subject.color }};background:{{ slot_lessons.0.subject.color }}22;"{% endif %}>
-          {% for lesson in slot_lessons %}
-            {% if not forloop.first %}<hr class="my-1">{% endif %}
-            {% if lesson.week == 0 and slot_lessons|length > 1 %}
-              <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
-            {% elif lesson.week == 1 and slot_lessons|length > 1 %}
-              <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
+        {% with entries=grid|get_item:d|get_item:p %}
+        <td {% if entries %}style="padding:2px;"{% endif %}>
+          {% for entry in entries %}
+            {% if not forloop.first %}<hr class="my-1" style="margin:3px 0;">{% endif %}
+            {% if entry.kind == 'regular' %}
+              {% with l=entry.lesson %}
+              <div style="border-left:3px solid {{ l.subject.color }};background:{{ l.subject.color }}22;padding:3px 5px;border-radius:3px;">
+                <div class="fw-semibold" style="font-size:.82rem;">{{ l.subject.short_name|default:l.subject.name }}</div>
+                <div class="text-muted" style="font-size:.75rem;">{{ l.school_class }}</div>
+                <div class="text-muted" style="font-size:.72rem;">{{ l.teacher }}</div>
+              </div>
+              {% endwith %}
+            {% elif entry.kind == 'alt' %}
+              {% if entry.week_a %}
+              <div style="border-left:3px solid {{ entry.week_a.subject.color }};background:{{ entry.week_a.subject.color }}22;padding:3px 5px;margin-bottom:2px;border-radius:3px;">
+                <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
+                <span class="fw-semibold" style="font-size:.8rem;">{{ entry.week_a.subject.short_name|default:entry.week_a.subject.name }}</span>
+                <div class="text-muted" style="font-size:.72rem;">{{ entry.week_a.school_class }}</div>
+                <div class="text-muted" style="font-size:.72rem;">{{ entry.week_a.teacher }}</div>
+              </div>
+              {% endif %}
+              {% if entry.week_b %}
+              <div style="border-left:3px solid {{ entry.week_b.subject.color }};background:{{ entry.week_b.subject.color }}22;padding:3px 5px;border-radius:3px;">
+                <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
+                <span class="fw-semibold" style="font-size:.8rem;">{{ entry.week_b.subject.short_name|default:entry.week_b.subject.name }}</span>
+                <div class="text-muted" style="font-size:.72rem;">{{ entry.week_b.school_class }}</div>
+                <div class="text-muted" style="font-size:.72rem;">{{ entry.week_b.teacher }}</div>
+              </div>
+              {% endif %}
+            {% elif entry.kind == 'week_a' %}
+              {% with l=entry.lesson %}
+              <div style="border-left:3px solid {{ l.subject.color }};background:{{ l.subject.color }}22;padding:3px 5px;border-radius:3px;">
+                <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
+                <span class="fw-semibold" style="font-size:.8rem;">{{ l.subject.short_name|default:l.subject.name }}</span>
+                <div class="text-muted" style="font-size:.72rem;">{{ l.school_class }}</div>
+                <div class="text-muted" style="font-size:.72rem;">{{ l.teacher }}</div>
+              </div>
+              {% endwith %}
+            {% elif entry.kind == 'week_b' %}
+              {% with l=entry.lesson %}
+              <div style="border-left:3px solid {{ l.subject.color }};background:{{ l.subject.color }}22;padding:3px 5px;border-radius:3px;">
+                <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
+                <span class="fw-semibold" style="font-size:.8rem;">{{ l.subject.short_name|default:l.subject.name }}</span>
+                <div class="text-muted" style="font-size:.72rem;">{{ l.school_class }}</div>
+                <div class="text-muted" style="font-size:.72rem;">{{ l.teacher }}</div>
+              </div>
+              {% endwith %}
             {% endif %}
-            <div class="fw-semibold" style="font-size:.82rem;">{{ lesson.subject.short_name|default:lesson.subject.name }}</div>
-            <div class="text-muted" style="font-size:.75rem;">{{ lesson.school_class }}</div>
-            <div class="text-muted" style="font-size:.72rem;">{{ lesson.teacher }}</div>
           {% endfor %}
         </td>
         {% endwith %}
