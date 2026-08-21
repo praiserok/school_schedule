@@ -332,6 +332,25 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
                                 [v for a_i in non_t_g1 for v in vB(a_i, d, p)])
                             m.add(t_g2_B <= nt_g1_B)
 
+        # Inner-period symmetry: same-teacher g1 and g2 must have equal counts of
+        # inner-period slots — a Phase 1 proxy for the actual pairing constraint in Phase 2.
+        if with_pairing and P >= 3:
+            for (cls_pk, subj_pk), gmap in group_map.items():
+                g_nums = sorted(gmap.keys())
+                if len(g_nums) < 2:
+                    continue
+                a_g1 = gmap[g_nums[0]]
+                a_g2 = gmap[g_nums[1]]
+                if assignments[a_g1].teacher_id != assignments[a_g2].teacher_id:
+                    continue
+                if a_g1 not in grp_set or a_g2 not in grp_set:
+                    continue
+                inner_g1 = sum(xb_[a_g1, d, p]
+                               for d in range(D) for p in range(1, P - 1))
+                inner_g2 = sum(xb_[a_g2, d, p]
+                               for d in range(D) for p in range(1, P - 1))
+                m.add(inner_g1 == inner_g2)
+
         # 8b (hard, Phase 1 only): unpaired same-teacher group lessons must be at
         # period 0 (first) or period P-1 (last) — no middle periods allowed.
         # This gives Phase 2 strong hints for edge placement.
@@ -370,6 +389,7 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
                 both = m.new_bool_var(f'p1_both_{a_g1}_{a_g2}_{d}')
                 m.add_min_equality(both, [has_g1, has_g2])
                 same_day_obj.append(both)
+
         if same_day_obj:
             m.maximize(cp_model.LinearExpr.Sum(same_day_obj))
 
@@ -584,6 +604,80 @@ def generate(schedule_id: int) -> tuple:
                                 model.add(r_xa == o_xa)
                             if not (isinstance(r_xb2, int) and isinstance(o_xb2, int)):
                                 model.add(r_xb2 == o_xb2)
+
+    # 6b. Subject-level pairing consistency (hard):
+    # Cross-teacher g1↔g2 pairing must be symmetric per subject: slots where teacher T's
+    # g1 is co-scheduled with a non-T g2 must equal slots where T's g2 is co-scheduled
+    # with a non-T g1.  Prevents g1 of one subject being paired while g2 is not.
+
+    # Pre-index group_map by class to avoid O(classes × group_map) scan.
+    cls_group_map: dict = defaultdict(dict)
+    for (cls_pk, subj_pk), gmap in group_map.items():
+        cls_group_map[cls_pk][subj_pk] = gmap
+
+    for c in classes:
+        t_subj_pairs: dict = defaultdict(list)  # t_id → [(a_g1, a_g2), ...]
+        for subj_pk, gmap in cls_group_map[c.pk].items():
+            g_nums = sorted(gmap.keys())
+            if len(g_nums) < 2:
+                continue
+            a_g1, a_g2 = gmap[g_nums[0]], gmap[g_nums[1]]
+            if assignments[a_g1].teacher_id == assignments[a_g2].teacher_id:
+                t_subj_pairs[assignments[a_g1].teacher_id].append((a_g1, a_g2))
+
+        for t_id, subj_pairs in t_subj_pairs.items():
+            t_g1_nums = {assignments[a_g1].group for a_g1, _ in subj_pairs}
+            t_g2_nums = {assignments[a_g2].group for _, a_g2 in subj_pairs}
+
+            cross_g2_ais: list = []  # non-T g2 → partner when T teaches g1
+            cross_g1_ais: list = []  # non-T g1 → partner when T teaches g2
+            for a_i in class_assignments[c.pk]:
+                a = assignments[a_i]
+                if a.teacher_id == t_id or a.group is None:
+                    continue
+                if a.group in t_g2_nums:
+                    cross_g2_ais.append(a_i)
+                elif a.group in t_g1_nums:
+                    cross_g1_ais.append(a_i)
+
+            if not cross_g2_ais and not cross_g1_ais:
+                continue
+
+            # Per-slot cross-partner presence (shared across all subjects of this teacher)
+            has_cg2: dict = {}
+            has_cg1: dict = {}
+            for d in range(D):
+                for p in range(P):
+                    if cross_g2_ais:
+                        v = model.new_bool_var(f'hcg2_{c.pk}_{t_id}_{d}_{p}')
+                        model.add_max_equality(v, [xb[a_j, d, p] for a_j in cross_g2_ais])
+                        has_cg2[d, p] = v
+                    if cross_g1_ais:
+                        v = model.new_bool_var(f'hcg1_{c.pk}_{t_id}_{d}_{p}')
+                        model.add_max_equality(v, [xb[a_j, d, p] for a_j in cross_g1_ais])
+                        has_cg1[d, p] = v
+
+            for a_g1, a_g2 in subj_pairs:
+                pc_g1: list = []
+                pc_g2: list = []
+                for d in range(D):
+                    for p in range(P):
+                        cg2 = has_cg2.get((d, p))
+                        if cg2 is not None:
+                            pv = model.new_bool_var(f'pair_g1_{a_g1}_{d}_{p}')
+                            model.add_min_equality(pv, [xb[a_g1, d, p], cg2])
+                            pc_g1.append(pv)
+                        cg1 = has_cg1.get((d, p))
+                        if cg1 is not None:
+                            pv = model.new_bool_var(f'pair_g2_{a_g2}_{d}_{p}')
+                            model.add_min_equality(pv, [xb[a_g2, d, p], cg1])
+                            pc_g2.append(pv)
+
+                if pc_g1 or pc_g2:
+                    model.add(
+                        cp_model.LinearExpr.Sum(pc_g1) ==
+                        cp_model.LinearExpr.Sum(pc_g2)
+                    )
 
     # obj_anchor: reward co-scheduling of same-teacher groups from DIFFERENT teachers.
     # For each class with 2+ teachers that each have same-teacher g1+g2 subjects:
@@ -933,7 +1027,8 @@ def generate(schedule_id: int) -> tuple:
     EDGE_WEIGHT    = 10
 
     all_obj_vars: list = list(obj_same_day) + list(obj_anchor)
-    all_obj_wts:  list = [PAIR_WEIGHT] * len(obj_same_day) + [PAIR_WEIGHT] * len(obj_anchor)
+    all_obj_wts:  list = ([PAIR_WEIGHT] * len(obj_same_day)
+                          + [PAIR_WEIGHT] * len(obj_anchor))
 
     if actually_unpaired and P >= 3:
         # --- tier 2: anti-clustering ---
