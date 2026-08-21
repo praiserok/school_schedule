@@ -273,6 +273,8 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
                         if not (isinstance(r_xb2, int) and isinstance(o_xb2, int)):
                             m.add(r_xb2 == o_xb2)
 
+        anchor_obj: list = []
+
         if with_pairing:
             # Same cross-teacher pairing logic as Phase 2 constraint 6b.
             # For each teacher T: T_g1 at inner ≤ sum(non-T g2) at inner, and vice versa.
@@ -332,6 +334,33 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
                                 [v for a_i in non_t_g1 for v in vB(a_i, d, p)])
                             m.add(t_g2_B <= nt_g1_B)
 
+                # Anchor reward: co-schedule cross-teacher pairs (mirrors Phase 2 obj_anchor).
+                # Gives Phase 1 the same pairing preference as Phase 2, so hints steer
+                # the solver toward optimal cross-teacher combinations (e.g. Прус+Зайцева
+                # and Прус+Лойко rather than Зайцева+Лойко when Прус has more lessons).
+                for ii in range(len(t_ids)):
+                    for jj in range(ii + 1, len(t_ids)):
+                        ta, tb = t_ids[ii], t_ids[jj]
+                        for d in range(D):
+                            for p in range(P):
+                                for wk_label, vv in (('A', vA), ('B', vB)):
+                                    for src_a, src_b, dir_tag in (
+                                        (same_t_g1_p1[ta], same_t_g2_p1[tb], 'ab'),
+                                        (same_t_g2_p1[ta], same_t_g1_p1[tb], 'ba'),
+                                    ):
+                                        va = [v for ai in src_a for v in vv(ai, d, p)]
+                                        vb = [v for ai in src_b for v in vv(ai, d, p)]
+                                        if va and vb:
+                                            tag = (f'{dir_tag}_{c.pk}_{ta}_{tb}'
+                                                   f'_{d}_{p}_{wk_label}')
+                                            ha = m.new_bool_var(f'p1anc_a_{tag}')
+                                            hb = m.new_bool_var(f'p1anc_b_{tag}')
+                                            m.add_max_equality(ha, va)
+                                            m.add_max_equality(hb, vb)
+                                            both = m.new_bool_var(f'p1anc_{tag}')
+                                            m.add_min_equality(both, [ha, hb])
+                                            anchor_obj.append(both)
+
         # Inner-period symmetry: same-teacher g1 and g2 must have equal counts of
         # inner-period slots — a Phase 1 proxy for the actual pairing constraint in Phase 2.
         if with_pairing and P >= 3:
@@ -390,8 +419,9 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
                 m.add_min_equality(both, [has_g1, has_g2])
                 same_day_obj.append(both)
 
-        if same_day_obj:
-            m.maximize(cp_model.LinearExpr.Sum(same_day_obj))
+        all_p1_obj = same_day_obj + anchor_obj
+        if all_p1_obj:
+            m.maximize(cp_model.LinearExpr.Sum(all_p1_obj))
 
         return m, xb_, xa_, xb2_
 
@@ -615,6 +645,12 @@ def generate(schedule_id: int) -> tuple:
     for (cls_pk, subj_pk), gmap in group_map.items():
         cls_group_map[cls_pk][subj_pk] = gmap
 
+    # Stores pair BoolVars from 6b for dynamic edge reward in tier 3.
+    # all_pair_vars[a_i][(d, p)] = BoolVar that is 1 when a_i is co-scheduled
+    # with a cross-teacher partner at slot (d, p).  Used instead of the static
+    # `actually_unpaired` set so the edge reward adapts to Phase 2 pairing choices.
+    all_pair_vars: dict = defaultdict(dict)
+
     for c in classes:
         t_subj_pairs: dict = defaultdict(list)  # t_id → [(a_g1, a_g2), ...]
         for subj_pk, gmap in cls_group_map[c.pk].items():
@@ -667,11 +703,13 @@ def generate(schedule_id: int) -> tuple:
                             pv = model.new_bool_var(f'pair_g1_{a_g1}_{d}_{p}')
                             model.add_min_equality(pv, [xb[a_g1, d, p], cg2])
                             pc_g1.append(pv)
+                            all_pair_vars[a_g1][d, p] = pv
                         cg1 = has_cg1.get((d, p))
                         if cg1 is not None:
                             pv = model.new_bool_var(f'pair_g2_{a_g2}_{d}_{p}')
                             model.add_min_equality(pv, [xb[a_g2, d, p], cg1])
                             pc_g2.append(pv)
+                            all_pair_vars[a_g2][d, p] = pv
 
                 if pc_g1 or pc_g2:
                     model.add(
@@ -1005,6 +1043,31 @@ def generate(schedule_id: int) -> tuple:
             for d, p in slots['xb2']:
                 model.add_hint(xb2[a_i, d, p], 1)
 
+    # Also hint all_pair_vars: directly tell Phase 2 which slots already have
+    # cross-teacher pairing per Phase 1b.  Without these hints Phase 2 can start
+    # from a wrong pairing (e.g. Зайцева+Лойко) even when the slot hints already
+    # reflect the correct pairing (Зайцева+Прус, Лойко+Прус).
+    if all_pair_vars and grp_hints:
+        slot_grp_hints: dict = defaultdict(list)
+        for a_i, slots in grp_hints.items():
+            a = assignments[a_i]
+            if a.group is None:
+                continue
+            for d, p in slots['base']:
+                slot_grp_hints[a.school_class_id, d, p].append(a_i)
+
+        for a_i, dp_vars in all_pair_vars.items():
+            a = assignments[a_i]
+            for (d, p), pv in dp_vars.items():
+                partners = slot_grp_hints.get((a.school_class_id, d, p), [])
+                is_paired = any(
+                    assignments[a_j].group != a.group
+                    and assignments[a_j].teacher_id != a.teacher_id
+                    for a_j in partners
+                    if a_j != a_i
+                )
+                model.add_hint(pv, int(is_paired))
+
     # -------------------------------------------------------------------------
     # Objective — three tiers (PAIR >> CLUSTER >> EDGE):
     #
@@ -1074,31 +1137,52 @@ def generate(schedule_id: int) -> tuple:
                         all_obj_vars.append(nt)
                         all_obj_wts.append(CLUSTER_WEIGHT)
 
-        # --- tier 3: edge reward ---
-        # Binary reward: only period 0 (always first) or the ACTUAL last occupied
-        # period of the class day earns EDGE_WEIGHT.  The old V-shaped formula was
-        # wrong: for P=7 it scores p=1 (reward=4) higher than p=4 (reward=2), so
-        # when a class has 5 lessons (0–4) the solver preferred ур.2 over the real
-        # last period ур.5 — the opposite of what we want.
-        for a_i in actually_unpaired:
-            a = assignments[a_i]
-            slot_A = cls_slot_A.get(a.school_class_id)
+    if P >= 3:
+        # --- tier 3: edge reward (dynamic) ---
+        # Reward same-teacher group lessons that are ACTUALLY unpaired in Phase 2
+        # AND placed at period 0 (first) or the real last occupied period of the day.
+        # Uses pair BoolVars from constraint 6b (all_pair_vars) so the reward adapts
+        # to Phase 2 pairing choices — not fixed to Phase 1a `actually_unpaired`.
+        # This fixes the case where Phase 2 chooses a different subject to unpair
+        # than Phase 1a predicted, leaving that subject at inner positions with no
+        # edge incentive.
+        seen_edge: set = set()
+        for (cls_pk, subj_pk), gmap in group_map.items():
+            g_nums = sorted(gmap.keys())
+            if len(g_nums) < 2:
+                continue
+            a_g1, a_g2 = gmap[g_nums[0]], gmap[g_nums[1]]
+            if assignments[a_g1].teacher_id != assignments[a_g2].teacher_id:
+                continue  # cross-teacher: always jointly scheduled, no free periods
+            slot_A = cls_slot_A.get(cls_pk)
             if slot_A is None:
                 continue
-            for d in range(D):
-                # Period 0 — always the first lesson of the day
-                all_obj_vars.append(xb[a_i, d, 0])
-                all_obj_wts.append(EDGE_WEIGHT)
-                # Periods 1..P-2 — reward only if this is the actual last of the day
-                # (no class lesson at period p+1 → this lesson is last)
-                for p in range(1, P - 1):
-                    is_last = model.new_bool_var(f'el_{a_i}_{d}_{p}')
-                    model.add_min_equality(is_last, [xb[a_i, d, p], slot_A[d, p + 1].Not()])
-                    all_obj_vars.append(is_last)
-                    all_obj_wts.append(EDGE_WEIGHT)
-                # Period P-1 — always the last possible slot
-                all_obj_vars.append(xb[a_i, d, P - 1])
-                all_obj_wts.append(EDGE_WEIGHT)
+            for a_i in (a_g1, a_g2):
+                if a_i in seen_edge:
+                    continue
+                seen_edge.add(a_i)
+                pair_dp = all_pair_vars.get(a_i, {})
+                for d in range(D):
+                    for p in range(P):
+                        pair_v = pair_dp.get((d, p))
+                        # Edge condition: period 0 (first) or actual last of day
+                        if p == 0:
+                            is_edge = xb[a_i, d, 0]
+                        elif p < P - 1:
+                            is_edge = model.new_bool_var(f'el_{a_i}_{d}_{p}')
+                            model.add_min_equality(
+                                is_edge, [xb[a_i, d, p], slot_A[d, p + 1].Not()])
+                        else:
+                            is_edge = xb[a_i, d, P - 1]
+                        # Reward only when edge AND unpaired
+                        if pair_v is not None:
+                            unp_edge = model.new_bool_var(f'ue_{a_i}_{d}_{p}')
+                            model.add_min_equality(unp_edge, [is_edge, pair_v.Not()])
+                            all_obj_vars.append(unp_edge)
+                        else:
+                            # No cross-teacher partners exist → always unpaired
+                            all_obj_vars.append(is_edge)
+                        all_obj_wts.append(EDGE_WEIGHT)
 
     if all_obj_vars:
         model.maximize(cp_model.LinearExpr.WeightedSum(all_obj_vars, all_obj_wts))
