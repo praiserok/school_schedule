@@ -155,6 +155,7 @@ def new_year(request):
 
 def teacher_list(request):
     subject_filter = request.GET.get('subject', '')
+    search = request.GET.get('q', '').strip()
     qs = Teacher.objects.prefetch_related(
         models.Prefetch(
             'teachersubject_set',
@@ -166,6 +167,12 @@ def teacher_list(request):
 
     from itertools import groupby
     teacher_list_data = list(qs.order_by('last_name'))
+    if search:
+        q = search.lower()
+        teacher_list_data = [
+            t for t in teacher_list_data
+            if q in t.last_name.lower() or q in t.first_name.lower()
+        ]
 
     for t in teacher_list_data:
         t.total_hours = sum(ts.hours_per_week for ts in t.teachersubject_set.all())
@@ -198,6 +205,7 @@ def teacher_list(request):
         'groups': groups,
         'subjects': subjects,
         'subject_filter': subject_filter,
+        'search': search,
         'total_count': len(teacher_list_data),
     })
 

@@ -9,15 +9,30 @@
   </a>
 </div>
 
+{# ── Пошук ── #}
+<form method="get" class="mb-2">
+  {% if subject_filter %}<input type="hidden" name="subject" value="{{ subject_filter }}">{% endif %}
+  <div class="input-group input-group-sm" style="max-width:320px;">
+    <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
+    <input type="text" name="q" value="{{ search }}" class="form-control"
+           placeholder="Пошук за прізвищем або іменем…" autocomplete="off">
+    {% if search %}
+    <a href="{% if subject_filter %}?subject={{ subject_filter }}{% else %}{% url 'scheduler:teacher_list' %}{% endif %}" class="btn btn-outline-secondary">
+      <i class="bi bi-x"></i>
+    </a>
+    {% endif %}
+  </div>
+</form>
+
 {# ── Фільтр по предметах ── #}
 <div class="table-card p-2 mb-3 d-flex flex-wrap gap-2 align-items-center">
   <span class="text-muted small ms-1">Предмет:</span>
-  <a href="{% url 'scheduler:teacher_list' %}"
+  <a href="{% url 'scheduler:teacher_list' %}{% if search %}?q={{ search }}{% endif %}"
      class="btn btn-sm {% if not subject_filter %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
     Всі
   </a>
   {% for s in subjects %}
-  <a href="?subject={{ s.pk }}"
+  <a href="?subject={{ s.pk }}{% if search %}&q={{ search }}{% endif %}"
      class="btn btn-sm {% if subject_filter == s.pk|stringformat:'s' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
      style="border-left: 3px solid {{ s.color }};">
     {{ s.short_name|default:s.name }}
@@ -107,7 +122,9 @@
 {% else %}
 <div class="table-card p-4 text-center text-muted">
   <i class="bi bi-person-badge display-6 d-block mb-2"></i>
-  {% if subject_filter %}
+  {% if search %}
+    Нікого не знайдено за запитом «{{ search }}».
+  {% elif subject_filter %}
     Вчителів з таким предметом не знайдено.
   {% else %}
     Вчителів ще немає. <a href="{% url 'scheduler:teacher_add' %}">Додайте першого</a>.

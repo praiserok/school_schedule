@@ -22,7 +22,8 @@ Saving:
   xa=1  --> Lesson(week=0) only
   xb2=1 --> Lesson(week=1) only
 """
-from collections import defaultdict
+from collections import Counter, defaultdict
+from itertools import combinations
 from math import ceil
 from ortools.sat.python import cp_model
 
@@ -967,10 +968,31 @@ def generate(schedule_id: int) -> tuple:
                             model.add(has_A[g1, d, p] + has_A[g2, d, p] <= 1)
                             model.add(has_B[g1, d, p] + has_B[g2, d, p] <= 1)
 
+    # 12. Soft: reward same-grade co-scheduling for shared-room subjects (e.g. PE).
+    # When two classes of the same grade land on the same slot they naturally pair
+    # in the shared room.  Adjacent-grade pairing is only a fallback.
+    obj_same_grade_room: list = []
+    for subj_pk, s_ais in subj_assignments.items():
+        if not assignments[s_ais[0]].subject.allow_shared_room:
+            continue
+        sg_grade_ais: dict = defaultdict(list)
+        for a_i in s_ais:
+            sg_grade_ais[assignments[a_i].school_class.grade].append(a_i)
+        for sg_ais in sg_grade_ais.values():
+            for ai, aj in combinations(sg_ais, 2):
+                if assignments[ai].teacher_id == assignments[aj].teacher_id:
+                    continue
+                for d in range(D):
+                    for p in range(P):
+                        both = model.new_bool_var(f'sgr_{ai}_{aj}_{d}_{p}')
+                        model.add_min_equality(both, [xb[ai, d, p], xb[aj, d, p]])
+                        obj_same_grade_room.append(both)
+
     # -------------------------------------------------------------------------
     # Phase 1: schedule group lessons with cross-teacher pairing, then hint Phase 2.
     _log(f'{len(assignments)} assignments, '
          f'obj_anchor={len(obj_anchor)} obj_same_day={len(obj_same_day)} '
+         f'obj_same_grade_room={len(obj_same_grade_room)} '
          f'unpaired_structural={len(unpaired_all)}')
 
     # Phase 1a: edge constraints only for structurally-unpaired lessons.
@@ -1087,13 +1109,15 @@ def generate(schedule_id: int) -> tuple:
     #    at centre.  Naturally pushes g1 → period 0, g2 → period P−1.
     #    Must be large enough that the 2-point gap between adjacent periods
     #    outweighs any residual slack in FEASIBLE (non-OPTIMAL) solutions.
-    PAIR_WEIGHT    = 1000
-    CLUSTER_WEIGHT = 100
-    EDGE_WEIGHT    = 100
+    PAIR_WEIGHT      = 1000
+    ROOM_PAIR_WEIGHT = 300   # same-grade room pairing: above cluster/edge, below teacher groups
+    CLUSTER_WEIGHT   = 100
+    EDGE_WEIGHT      = 100
 
-    all_obj_vars: list = list(obj_same_day) + list(obj_anchor)
-    all_obj_wts:  list = ([PAIR_WEIGHT] * len(obj_same_day)
-                          + [PAIR_WEIGHT] * len(obj_anchor))
+    all_obj_vars: list = list(obj_same_day) + list(obj_anchor) + list(obj_same_grade_room)
+    all_obj_wts:  list = ([PAIR_WEIGHT]      * len(obj_same_day)
+                          + [PAIR_WEIGHT]    * len(obj_anchor)
+                          + [ROOM_PAIR_WEIGHT] * len(obj_same_grade_room))
 
     if actually_unpaired and P >= 3:
         # --- tier 2: anti-clustering ---
@@ -1310,10 +1334,20 @@ def generate(schedule_id: int) -> tuple:
                     if solver.value(xb2[a_i, d, p]):
                         alt_b_sched.append((d, p, gk, a_i))
 
-    sort_key = lambda t: (t[0] * P + t[1], t[2])
-    base_sched.sort(key=sort_key)
-    alt_a_sched.sort(key=sort_key)
-    alt_b_sched.sort(key=sort_key)
+    def _make_room_sort_key(sched):
+        # Within each slot: process grades that appear 2+ times first so same-grade
+        # pairs claim the shared room together.  Singles follow and get whatever
+        # capacity remains (possibly adjacent-grade pairing).
+        counts = Counter((d, p, gk) for d, p, gk, _ in sched if gk != 0)
+        def key(t):
+            d, p, gk, _ = t
+            same_grade_count = counts.get((d, p, gk), 1) if gk != 0 else 1
+            return (d * P + p, -same_grade_count, gk)
+        return key
+
+    base_sched.sort(key=_make_room_sort_key(base_sched))
+    alt_a_sched.sort(key=_make_room_sort_key(alt_a_sched))
+    alt_b_sched.sort(key=_make_room_sort_key(alt_b_sched))
 
     Lesson.objects.filter(schedule=schedule).delete()
     to_create = []

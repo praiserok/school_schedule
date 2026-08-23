@@ -47,6 +47,8 @@
       <div class="toc-section">Генератор</div>
       <a href="#generator"><i class="bi bi-cpu me-1"></i>Як працює</a>
       <a href="#constraints">— Обмеження</a>
+      <a href="#group-logic">— Логіка підгруп</a>
+      <a href="#alt-weeks">— Чергування А/Б тижнів</a>
       <a href="#rooms-algo">— Розподіл кабінетів</a>
       <a href="#no-solution">— Якщо не знайдено</a>
 
@@ -372,12 +374,115 @@
                 <td><strong>Групові уроки одночасно</strong></td>
                 <td class="text-muted">Обидві групи одного предмету в одному класі завжди ставляться в один і той самий слот</td>
               </tr>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Без повторів предмету в день</strong></td>
+                <td class="text-muted">Один і той самий предмет не може бути двічі в один день (якщо не позначено "Можна парою")</td>
+              </tr>
+              <tr>
+                <td class="text-center constraint-icon">✅</td>
+                <td><strong>Ємність спеціалізованих кабінетів</strong></td>
+                <td class="text-muted">Кількість класів одночасно в спортзалі / хімлабі не перевищує вказаний ліміт</td>
+              </tr>
             </tbody>
           </table>
         </div>
       </div>
 
-      <div id="rooms-algo" class="help-section">
+      <!-- Логіка підгруп -->
+      <div id="group-logic" class="help-section mt-4">
+        <h6 class="fw-semibold mb-3">Логіка розміщення підгруп</h6>
+
+        <p class="text-muted mb-3">
+          Коли клас ділиться на групи — алгоритм не просто ставить їх паралельно.
+          Він намагається <strong>скласти розклад так, щоб учням було зручно</strong>.
+          Є два різних сценарії:
+        </p>
+
+        <div class="entity-card mb-3">
+          <h6 class="fw-semibold mb-2">
+            <span class="badge bg-success me-2">Сценарій 1</span>
+            Різні вчителі — різні предмети в один час
+          </h6>
+          <p class="text-muted mb-2">
+            Наприклад, Іваненко веде Англійську для гр.1, а Петренко — для гр.2. Вони обидва навчають той самий предмет, тому їх уроки <strong>завжди ставляться в один слот</strong> (жорстке обмеження). Учні розходяться по кабінетах, а клас не "розривається" на дні.
+          </p>
+        </div>
+
+        <div class="entity-card mb-3">
+          <h6 class="fw-semibold mb-2">
+            <span class="badge bg-primary me-2">Сценарій 2</span>
+            Один вчитель веде гр.1 і гр.2 з різних предметів
+          </h6>
+          <p class="text-muted mb-2">
+            Наприклад, Прус веде Укр.мову гр.1 + ЯДС гр.1, а Зайцева — Укр.мову гр.2 + ЯДС гр.2.
+            Тут груп від <em>одного</em> вчителя неможливо поставити паралельно (вчитель не може бути в двох місцях). Натомість алгоритм прагне:
+          </p>
+          <ul class="text-muted mb-0">
+            <li class="mb-1"><strong>Ставити уроки в один день.</strong> Якщо у Прус є урок для гр.1 у вівторок, то й урок для гр.2 теж у вівторок — щоб клас не мав "вільних половинок" розкиданих по тижню</li>
+            <li class="mb-1"><strong>Парувати вчителів між собою.</strong> У слот, де Прус веде гр.1, алгоритм намагається поставити Зайцеву або Лойко (хто веде гр.2). Так обидві групи зайняті одночасно, і в класу немає "дірок"</li>
+            <li><strong>Вчитель з більшим навантаженням паруватиметься частіше.</strong> Якщо Прус має 6 годин групових уроків, а Зайцева і Лойко по 2 — Прус отримає пару з обома (3+3 слоти), а не дві вчительки між собою</li>
+          </ul>
+        </div>
+
+        <div class="entity-card mb-3">
+          <h6 class="fw-semibold mb-2">
+            <span class="badge bg-secondary me-2">Коли пари не знайти</span>
+            Непарні групи — на краях дня
+          </h6>
+          <p class="text-muted mb-2">
+            Якщо для якоїсь підгрупи партнера немає (наприклад, єдиний вчитель), алгоритм ставить цей урок <strong>першим або останнім</strong> у день. Так учні, які не мають цього уроку, можуть прийти пізніше або піти раніше, замість того щоб сидіти з вікном посередині дня.
+          </p>
+        </div>
+
+        <div class="tip-box">
+          <i class="bi bi-lightbulb me-1"></i>
+          <strong>Чому іноді результат відрізняється між запусками?</strong><br>
+          Алгоритм має ліміт часу (≈40 с). За цей час він шукає <em>найкращий</em> знайдений варіант, а не єдино правильний. При великій кількості вчителів і обмежень кожен запуск може знайти трохи інший, але рівноцінний розклад.
+        </div>
+      </div>
+
+      <!-- Чергування А/Б тижнів -->
+      <div id="alt-weeks" class="help-section mt-4">
+        <h6 class="fw-semibold mb-3">Чергування А/Б тижнів</h6>
+        <p class="text-muted mb-3">
+          Якщо предмет задано з <strong>дробовою кількістю годин</strong> (наприклад, 1.5 год/тиж) — це означає "один тиждень через два". Алгоритм реалізує це так:
+        </p>
+        <div class="table-card mb-3">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Годин/тиж</th>
+                <th>Що відбувається</th>
+                <th>Вигляд у сітці</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>2</code></td>
+                <td class="text-muted">2 однакових слоти щотижня</td>
+                <td><span class="text-muted">Звичайний урок, без значка</span></td>
+              </tr>
+              <tr>
+                <td><code>1.5</code></td>
+                <td class="text-muted">1 слот щотижня + 1 слот через тиждень</td>
+                <td><span class="badge text-bg-secondary" style="font-size:.7rem;">А</span> або <span class="badge text-bg-dark" style="font-size:.7rem;">Б</span> у клітинці</td>
+              </tr>
+              <tr>
+                <td><code>0.5</code></td>
+                <td class="text-muted">1 слот тільки у тижень А або тільки у тижень Б</td>
+                <td><span class="badge text-bg-secondary" style="font-size:.7rem;">А</span> або <span class="badge text-bg-dark" style="font-size:.7rem;">Б</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="info-box">
+          <i class="bi bi-info-circle me-1"></i>
+          В одній клітинці сітки можуть бути <strong>два різних предмети</strong> — один у тижень А, інший у тижень Б. Це не помилка: один слот фізично завжди зайнятий, просто зміст чергується.
+        </div>
+      </div>
+
+      <div id="rooms-algo" class="help-section mt-4">
         <h6 class="fw-semibold mb-3">Розподіл кабінетів</h6>
         <p class="text-muted mb-2">Кабінети призначаються після генерації, у порядку пріоритету:</p>
         <div class="d-flex flex-column gap-2 mb-3">
@@ -523,11 +628,16 @@
           <code>Іваненко | Англійська | 5А | 2 год | гр.1</code><br>
           <code>Петренко | Англійська | 5А | 2 год | гр.2</code>
         </div>
-        <ul class="text-muted mb-0">
+        <ul class="text-muted mb-2">
           <li>Годин на тиждень у обох груп має бути <strong>однаково</strong></li>
           <li>Генератор автоматично поставить обидва уроки в один слот</li>
           <li>Якщо у класу є основний кабінет — одна з груп може взяти його, інша шукатиме вільний</li>
         </ul>
+        <div class="tip-box">
+          <i class="bi bi-info-circle me-1"></i>
+          Коли в класі кілька вчителів ведуть групові предмети — читайте розділ
+          <a href="#group-logic">Логіка розміщення підгруп</a>: там пояснено як алгоритм вибирає пари вчителів.
+        </div>
       </div>
 
       <div id="gym" class="entity-card help-section">
