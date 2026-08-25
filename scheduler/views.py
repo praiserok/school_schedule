@@ -883,3 +883,126 @@ def schedule_view(request, pk):
         'all_teachers': Teacher.objects.all(),
         'bell_times': bell_times,
     })
+
+
+# ─── Exports ─────────────────────────────────────────────────────────────────
+
+def export_teacher_load(request):
+    """XLSX: all teachers and their subject load per class."""
+    import io
+    from django.http import HttpResponse
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Навантаження вчителів'
+
+    # ── Styles ──
+    hdr_font   = Font(bold=True, color='FFFFFF', size=11)
+    hdr_fill   = PatternFill('solid', fgColor='2C5F8A')
+    sub_font   = Font(bold=True, size=10)
+    sub_fill   = PatternFill('solid', fgColor='D6E4F0')
+    total_font = Font(bold=True, size=10)
+    total_fill = PatternFill('solid', fgColor='EAF4EA')
+    center     = Alignment(horizontal='center', vertical='center')
+    thin       = Side(style='thin', color='BFBFBF')
+    border     = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def cell(row, col, value, font=None, fill=None, align=None, num_fmt=None):
+        c = ws.cell(row=row, column=col, value=value)
+        if font:   c.font      = font
+        if fill:   c.fill      = fill
+        if align:  c.alignment = align
+        if num_fmt: c.number_format = num_fmt
+        c.border = border
+        return c
+
+    # ── Header row ──
+    headers = ['Вчитель', 'Предмет', 'Клас', 'Група', 'Год/тиж']
+    for col, h in enumerate(headers, 1):
+        cell(1, col, h, font=hdr_font, fill=hdr_fill, align=center)
+    ws.row_dimensions[1].height = 20
+
+    # ── Data ──
+    assignments = (
+        TeacherSubject.objects
+        .select_related('teacher', 'subject', 'school_class')
+        .order_by('teacher__last_name', 'teacher__first_name',
+                  'school_class__grade', 'school_class__letter',
+                  'subject__name', 'group')
+    )
+
+    row = 2
+    current_teacher = None
+    teacher_start   = 2
+    teacher_total   = 0
+
+    for ts in assignments:
+        teacher_name = str(ts.teacher)
+
+        # Teacher subtotal row when teacher changes
+        if current_teacher is not None and teacher_name != current_teacher:
+            cell(row, 1, f'Разом: {current_teacher}', font=total_font, fill=total_fill)
+            cell(row, 2, '', fill=total_fill)
+            cell(row, 3, '', fill=total_fill)
+            cell(row, 4, '', fill=total_fill)
+            cell(row, 5, teacher_total, font=total_font, fill=total_fill,
+                 align=center, num_fmt='0.0')
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+            row += 1
+            teacher_total = 0
+
+        current_teacher = teacher_name
+        teacher_total  += ts.hours_per_week
+
+        cell(row, 1, teacher_name)
+        cell(row, 2, ts.subject.name)
+        cell(row, 3, str(ts.school_class), align=center)
+        cell(row, 4, ts.group if ts.group else '', align=center)
+        cell(row, 5, float(ts.hours_per_week), align=center, num_fmt='0.0')
+        row += 1
+
+    # Last teacher subtotal
+    if current_teacher:
+        cell(row, 1, f'Разом: {current_teacher}', font=total_font, fill=total_fill)
+        cell(row, 2, '', fill=total_fill)
+        cell(row, 3, '', fill=total_fill)
+        cell(row, 4, '', fill=total_fill)
+        cell(row, 5, teacher_total, font=total_font, fill=total_fill,
+             align=center, num_fmt='0.0')
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        row += 1
+
+    # Grand total
+    grand_total = float(TeacherSubject.objects.aggregate(
+        s=models.Sum('hours_per_week')
+    )['s'] or 0)
+    gt_font = Font(bold=True, color='FFFFFF', size=11)
+    gt_fill = PatternFill('solid', fgColor='2C5F8A')
+    cell(row, 1, 'ЗАГАЛОМ', font=gt_font, fill=gt_fill, align=center)
+    cell(row, 2, '', font=gt_font, fill=gt_fill)
+    cell(row, 3, '', font=gt_font, fill=gt_fill)
+    cell(row, 4, '', font=gt_font, fill=gt_fill)
+    cell(row, 5, grand_total, font=gt_font, fill=gt_fill, align=center, num_fmt='0.0')
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+
+    # ── Column widths ──
+    ws.column_dimensions['A'].width = 28
+    ws.column_dimensions['B'].width = 26
+    ws.column_dimensions['C'].width = 8
+    ws.column_dimensions['D'].width = 8
+    ws.column_dimensions['E'].width = 12
+
+    ws.freeze_panes = 'A2'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    resp = HttpResponse(
+        buf,
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    resp['Content-Disposition'] = 'attachment; filename="teacher_load.xlsx"'
+    return resp

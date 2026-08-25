@@ -55,4 +55,7 @@ urlpatterns = [
     path('schedules/<int:pk>/generate/', views.schedule_generate, name='schedule_generate'),
     path('schedules/<int:schedule_pk>/teacher/<int:teacher_pk>/', views.teacher_schedule, name='teacher_schedule'),
     path('schedules/<int:pk>/move-lesson/', views.lesson_move, name='lesson_move'),
+
+    # Exports
+    path('export/teacher-load/', views.export_teacher_load, name='export_teacher_load'),
 ]

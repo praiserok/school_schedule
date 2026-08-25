@@ -85,8 +85,11 @@
 
   {# ── Навантаження вчителів ── #}
   <div class="col-md-8">
-    <div class="fw-semibold mb-2 ps-1">
-      <i class="bi bi-person-badge me-2"></i>Навантаження вчителів
+    <div class="d-flex align-items-center justify-content-between mb-2 ps-1">
+      <span class="fw-semibold"><i class="bi bi-person-badge me-2"></i>Навантаження вчителів</span>
+      <a href="{% url 'scheduler:export_teacher_load' %}" class="btn btn-sm btn-outline-success">
+        <i class="bi bi-file-earmark-excel me-1"></i>Експорт XLSX
+      </a>
     </div>
     {% for subj, teachers in teacher_groups %}
     {# Заголовок предмету #}
