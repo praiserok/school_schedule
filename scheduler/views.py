@@ -1043,6 +1043,15 @@ def export_class_load(request):
         cell(1, col, h, font=hdr_font, fill=hdr_fill, align=center)
     ws.row_dimensions[1].height = 20
 
+    # ── Pre-compute merged total per class (grouped subjects counted once) ──
+    # For each (class, subject) pair take the max hours across groups, then sum.
+    from django.db.models import Max
+    merged_by_class: dict = defaultdict(float)
+    for row_agg in (TeacherSubject.objects
+                    .values('school_class_id', 'subject_id')
+                    .annotate(h=Max('hours_per_week'))):
+        merged_by_class[row_agg['school_class_id']] += float(row_agg['h'])
+
     # ── Data ──
     assignments = (
         TeacherSubject.objects
@@ -1051,26 +1060,38 @@ def export_class_load(request):
                   'subject__name', 'group', 'teacher__last_name')
     )
 
+    merge2_fill = PatternFill('solid', fgColor='D5E8D4')  # slightly different green
+
+    def write_class_subtotal(r, cls_name, cls_pk, raw_total):
+        merged = merged_by_class.get(cls_pk, raw_total)
+        # Row 1: full sum (groups counted separately)
+        cell(r, 1, f'Разом (з групами): {cls_name}', font=total_font, fill=total_fill)
+        for c in range(2, 5): cell(r, c, '', fill=total_fill)
+        cell(r, 5, raw_total, font=total_font, fill=total_fill, align=center, num_fmt='0.0')
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
+        r += 1
+        # Row 2: merged sum (group duplicates removed)
+        cell(r, 1, f'Разом (без груп): {cls_name}', font=total_font, fill=merge2_fill)
+        for c in range(2, 5): cell(r, c, '', fill=merge2_fill)
+        cell(r, 5, merged, font=total_font, fill=merge2_fill, align=center, num_fmt='0.0')
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
+        return r + 1
+
     row           = 2
     current_class = None
+    current_cls_pk = None
     class_total   = 0
 
     for ts in assignments:
         cls_name = str(ts.school_class)
 
         if current_class is not None and cls_name != current_class:
-            cell(row, 1, f'Разом: {current_class}', font=total_font, fill=total_fill)
-            cell(row, 2, '', fill=total_fill)
-            cell(row, 3, '', fill=total_fill)
-            cell(row, 4, '', fill=total_fill)
-            cell(row, 5, class_total, font=total_font, fill=total_fill,
-                 align=center, num_fmt='0.0')
-            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
-            row += 1
+            row = write_class_subtotal(row, current_class, current_cls_pk, class_total)
             class_total = 0
 
-        current_class = cls_name
-        class_total  += ts.hours_per_week
+        current_class  = cls_name
+        current_cls_pk = ts.school_class_id
+        class_total   += ts.hours_per_week
 
         cell(row, 1, cls_name, align=center)
         cell(row, 2, ts.subject.name)
@@ -1081,14 +1102,7 @@ def export_class_load(request):
 
     # Last class subtotal
     if current_class:
-        cell(row, 1, f'Разом: {current_class}', font=total_font, fill=total_fill)
-        cell(row, 2, '', fill=total_fill)
-        cell(row, 3, '', fill=total_fill)
-        cell(row, 4, '', fill=total_fill)
-        cell(row, 5, class_total, font=total_font, fill=total_fill,
-             align=center, num_fmt='0.0')
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
-        row += 1
+        row = write_class_subtotal(row, current_class, current_cls_pk, class_total)
 
     # Grand total
     grand_total = float(TeacherSubject.objects.aggregate(
