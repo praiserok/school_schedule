@@ -1104,18 +1104,20 @@ def export_class_load(request):
     if current_class:
         row = write_class_subtotal(row, current_class, current_cls_pk, class_total)
 
-    # Grand total
+    # Grand totals
     grand_total = float(TeacherSubject.objects.aggregate(
         s=models.Sum('hours_per_week')
     )['s'] or 0)
+    grand_merged = sum(merged_by_class.values())
     gt_font = Font(bold=True, color='FFFFFF', size=11)
     gt_fill = PatternFill('solid', fgColor='2C5F8A')
-    cell(row, 1, 'ЗАГАЛОМ', font=gt_font, fill=gt_fill, align=center)
-    cell(row, 2, '', font=gt_font, fill=gt_fill)
-    cell(row, 3, '', font=gt_font, fill=gt_fill)
-    cell(row, 4, '', font=gt_font, fill=gt_fill)
-    cell(row, 5, grand_total, font=gt_font, fill=gt_fill, align=center, num_fmt='0.0')
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+    for label, value in [('ЗАГАЛОМ (з групами)', grand_total),
+                          ('ЗАГАЛОМ (без груп)', grand_merged)]:
+        cell(row, 1, label, font=gt_font, fill=gt_fill, align=center)
+        for c in range(2, 5): cell(row, c, '', font=gt_font, fill=gt_fill)
+        cell(row, 5, value, font=gt_font, fill=gt_fill, align=center, num_fmt='0.0')
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        row += 1
 
     # ── Column widths ──
     ws.column_dimensions['A'].width = 8
