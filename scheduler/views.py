@@ -1006,3 +1006,118 @@ def export_teacher_load(request):
     )
     resp['Content-Disposition'] = 'attachment; filename="teacher_load.xlsx"'
     return resp
+
+
+def export_class_load(request):
+    """XLSX: all classes with subjects, teachers, groups and hours."""
+    import io
+    from django.http import HttpResponse
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Навантаження по класах'
+
+    # ── Styles ──
+    hdr_font   = Font(bold=True, color='FFFFFF', size=11)
+    hdr_fill   = PatternFill('solid', fgColor='2C5F8A')
+    total_font = Font(bold=True, size=10)
+    total_fill = PatternFill('solid', fgColor='EAF4EA')
+    center     = Alignment(horizontal='center', vertical='center')
+    thin       = Side(style='thin', color='BFBFBF')
+    border     = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def cell(row, col, value, font=None, fill=None, align=None, num_fmt=None):
+        c = ws.cell(row=row, column=col, value=value)
+        if font:    c.font   = font
+        if fill:    c.fill   = fill
+        if align:   c.alignment = align
+        if num_fmt: c.number_format = num_fmt
+        c.border = border
+        return c
+
+    # ── Header ──
+    headers = ['Клас', 'Предмет', 'Вчитель', 'Група', 'Год/тиж']
+    for col, h in enumerate(headers, 1):
+        cell(1, col, h, font=hdr_font, fill=hdr_fill, align=center)
+    ws.row_dimensions[1].height = 20
+
+    # ── Data ──
+    assignments = (
+        TeacherSubject.objects
+        .select_related('teacher', 'subject', 'school_class')
+        .order_by('school_class__grade', 'school_class__letter',
+                  'subject__name', 'group', 'teacher__last_name')
+    )
+
+    row           = 2
+    current_class = None
+    class_total   = 0
+
+    for ts in assignments:
+        cls_name = str(ts.school_class)
+
+        if current_class is not None and cls_name != current_class:
+            cell(row, 1, f'Разом: {current_class}', font=total_font, fill=total_fill)
+            cell(row, 2, '', fill=total_fill)
+            cell(row, 3, '', fill=total_fill)
+            cell(row, 4, '', fill=total_fill)
+            cell(row, 5, class_total, font=total_font, fill=total_fill,
+                 align=center, num_fmt='0.0')
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+            row += 1
+            class_total = 0
+
+        current_class = cls_name
+        class_total  += ts.hours_per_week
+
+        cell(row, 1, cls_name, align=center)
+        cell(row, 2, ts.subject.name)
+        cell(row, 3, str(ts.teacher))
+        cell(row, 4, ts.group if ts.group else '', align=center)
+        cell(row, 5, float(ts.hours_per_week), align=center, num_fmt='0.0')
+        row += 1
+
+    # Last class subtotal
+    if current_class:
+        cell(row, 1, f'Разом: {current_class}', font=total_font, fill=total_fill)
+        cell(row, 2, '', fill=total_fill)
+        cell(row, 3, '', fill=total_fill)
+        cell(row, 4, '', fill=total_fill)
+        cell(row, 5, class_total, font=total_font, fill=total_fill,
+             align=center, num_fmt='0.0')
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        row += 1
+
+    # Grand total
+    grand_total = float(TeacherSubject.objects.aggregate(
+        s=models.Sum('hours_per_week')
+    )['s'] or 0)
+    gt_font = Font(bold=True, color='FFFFFF', size=11)
+    gt_fill = PatternFill('solid', fgColor='2C5F8A')
+    cell(row, 1, 'ЗАГАЛОМ', font=gt_font, fill=gt_fill, align=center)
+    cell(row, 2, '', font=gt_font, fill=gt_fill)
+    cell(row, 3, '', font=gt_font, fill=gt_fill)
+    cell(row, 4, '', font=gt_font, fill=gt_fill)
+    cell(row, 5, grand_total, font=gt_font, fill=gt_fill, align=center, num_fmt='0.0')
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+
+    # ── Column widths ──
+    ws.column_dimensions['A'].width = 8
+    ws.column_dimensions['B'].width = 26
+    ws.column_dimensions['C'].width = 28
+    ws.column_dimensions['D'].width = 8
+    ws.column_dimensions['E'].width = 12
+
+    ws.freeze_panes = 'A2'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    resp = HttpResponse(
+        buf,
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    resp['Content-Disposition'] = 'attachment; filename="class_load.xlsx"'
+    return resp

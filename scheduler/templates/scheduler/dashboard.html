@@ -40,12 +40,20 @@
     </a>
   </div>
   <div class="col-6 col-md-4 col-lg-2">
-    <a href="{% url 'scheduler:ts_list' %}" class="text-decoration-none">
-      <div class="table-card p-3 text-center h-100">
+    <div class="table-card p-3 text-center h-100 d-flex flex-column align-items-center justify-content-between gap-2">
+      <a href="{% url 'scheduler:ts_list' %}" class="text-decoration-none w-100">
         <div class="display-6 fw-bold text-secondary">{{ counts.assignments }}</div>
         <div class="text-muted small mt-1"><i class="bi bi-table me-1"></i>Навантаження</div>
+      </a>
+      <div class="d-flex gap-1 w-100 justify-content-center">
+        <a href="{% url 'scheduler:export_teacher_load' %}" class="btn btn-outline-success btn-sm py-0 px-1" title="Експорт по вчителях">
+          <i class="bi bi-person-badge" style="font-size:.75rem;"></i>
+        </a>
+        <a href="{% url 'scheduler:export_class_load' %}" class="btn btn-outline-success btn-sm py-0 px-1" title="Експорт по класах">
+          <i class="bi bi-people" style="font-size:.75rem;"></i>
+        </a>
       </div>
-    </a>
+    </div>
   </div>
   <div class="col-6 col-md-4 col-lg-2">
     <a href="{% url 'scheduler:schedule_list' %}" class="text-decoration-none">
@@ -85,11 +93,8 @@
 
   {# ── Навантаження вчителів ── #}
   <div class="col-md-8">
-    <div class="d-flex align-items-center justify-content-between mb-2 ps-1">
-      <span class="fw-semibold"><i class="bi bi-person-badge me-2"></i>Навантаження вчителів</span>
-      <a href="{% url 'scheduler:export_teacher_load' %}" class="btn btn-sm btn-outline-success">
-        <i class="bi bi-file-earmark-excel me-1"></i>Експорт XLSX
-      </a>
+    <div class="fw-semibold mb-2 ps-1">
+      <i class="bi bi-person-badge me-2"></i>Навантаження вчителів
     </div>
     {% for subj, teachers in teacher_groups %}
     {# Заголовок предмету #}

@@ -58,4 +58,5 @@ urlpatterns = [
 
     # Exports
     path('export/teacher-load/', views.export_teacher_load, name='export_teacher_load'),
+    path('export/class-load/', views.export_class_load, name='export_class_load'),
 ]
