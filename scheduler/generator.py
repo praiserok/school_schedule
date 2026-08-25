@@ -30,6 +30,11 @@ from ortools.sat.python import cp_model
 from .models import Schedule, Lesson, Teacher, SchoolClass, TeacherSubject, Room
 
 
+def _avail_mask(teacher, D: int) -> str:
+    """Return a D-character availability mask for a teacher ('1'=available, '0'=not)."""
+    return teacher.available_days[:D].ljust(D, '0')
+
+
 def _summary(schedule, assignments, base_count, alt_count, canonical,
              class_total_A, teachers, teacher_assignments, classes, D, P) -> str:
     cls_by_pk = {c.pk: c for c in classes}
@@ -46,7 +51,7 @@ def _summary(schedule, assignments, base_count, alt_count, canonical,
         t_total = sum(base_count[a_i] + alt_count[a_i] for a_i in teacher_assignments[t.pk])
         if t_total == 0:
             continue
-        mask = t.available_days[:D].ljust(D, '0')
+        mask = _avail_mask(t, D)
         avail = mask.count('1')
         lim = avail * t.max_lessons_per_day
         lines.append(f'  {t}: {t_total}/{lim} ({avail} dn x {t.max_lessons_per_day} ur)')
@@ -67,7 +72,7 @@ def _diagnose(schedule, assignments, base_count, alt_count, canonical,
             )
 
     for t in teachers:
-        mask = t.available_days[:D].ljust(D, '0')
+        mask = _avail_mask(t, D)
         avail_days = mask.count('1')
         max_possible = avail_days * t.max_lessons_per_day
         t_total = sum(base_count[a_i] + alt_count[a_i] for a_i in teacher_assignments[t.pk])
@@ -78,7 +83,7 @@ def _diagnose(schedule, assignments, base_count, alt_count, canonical,
             )
 
     for t in teachers:
-        mask = t.available_days[:D].ljust(D, '0')
+        mask = _avail_mask(t, D)
         if '1' not in mask and teacher_assignments[t.pk]:
             names = ', '.join(str(assignments[a_i]) for a_i in teacher_assignments[t.pk][:3])
             issues.append(f'Вчитель {t}: немає доступних днів, але є навантаження ({names}...)')
@@ -110,6 +115,7 @@ def _diagnose(schedule, assignments, base_count, alt_count, canonical,
                 f'лише {effective_cap} кабінет(ів) -- потрібно {min_slots_needed} > {total_slots} слотів'
             )
 
+    teacher_by_pk = {t.pk: t for t in teachers}
     group_map: dict = defaultdict(dict)
     for a_i, a in enumerate(assignments):
         if a.group is not None:
@@ -123,15 +129,58 @@ def _diagnose(schedule, assignments, base_count, alt_count, canonical,
             continue
         rep_a = assignments[group_ais[0]]
         for t_id in teacher_ids:
-            t_obj = next(t for t in teachers if t.pk == t_id)
+            t_obj = teacher_by_pk[t_id]
             t_total = sum(base_count[a_i] + alt_count[a_i] for a_i in teacher_assignments[t_id])
-            mask = t_obj.available_days[:D].ljust(D, '0')
+            mask = _avail_mask(t_obj, D)
             avail = mask.count('1') * t_obj.max_lessons_per_day
             if t_total > avail:
                 issues.append(
                     f'Вчитель {t_obj} (co-scheduling {rep_a.subject}/{rep_a.school_class}): '
                     f'перевантажений ({t_total} > {avail} ур/тиж)'
                 )
+
+    # Check: teacher has more lessons of a non-double subject than available days
+    for a_i, a in enumerate(assignments):
+        if a.subject.can_be_double:
+            continue
+        total = base_count[a_i] + alt_count[a_i]
+        if total <= 1:
+            continue
+        mask = _avail_mask(a.teacher, D)
+        avail_days = mask.count('1')
+        if total > avail_days:
+            issues.append(
+                f'Вчитель {a.teacher}: {a.subject} у {a.school_class} — '
+                f'{total} ур/тиж, але лише {avail_days} робочих дн і подвійний урок заборонено '
+                f'(потрібно мінімум {total} дн)'
+            )
+
+    # Check cross-teacher groups share at least one common available day
+    for (cls_pk, subj_pk), gmap in group_map.items():
+        group_ais = list(gmap.values())
+        if len(group_ais) < 2:
+            continue
+        teacher_ids = list({assignments[a_i].teacher_id for a_i in group_ais})
+        if len(teacher_ids) <= 1:
+            continue
+        t_objs = {t_id: teacher_by_pk[t_id] for t_id in teacher_ids}
+        masks = {t_id: _avail_mask(t_objs[t_id], D) for t_id in teacher_ids}
+        common_days = sum(
+            1 for d in range(D) if all(masks[t_id][d] == '1' for t_id in teacher_ids)
+        )
+        max_base = max(base_count[a_i] for a_i in group_ais)
+        rep_a = assignments[group_ais[0]]
+        t_names = ', '.join(str(t_objs[t_id]) for t_id in teacher_ids)
+        if common_days == 0:
+            issues.append(
+                f'Групи {rep_a.subject}/{rep_a.school_class}: вчителі [{t_names}] '
+                f'не мають жодного спільного дня — co-scheduling неможливий'
+            )
+        elif common_days * P < max_base:
+            issues.append(
+                f'Групи {rep_a.subject}/{rep_a.school_class}: лише {common_days} спільних '
+                f'дн × {P} ур = {common_days * P} слотів < {max_base} потрібних уроків'
+            )
 
     # Check group balance: each student group must have the same total hours per class
     # so that no-window and uniform-load constraints are symmetric.
@@ -156,9 +205,480 @@ def _diagnose(schedule, assignments, base_count, alt_count, canonical,
     return issues
 
 
+def _solve_gap_phase(assignments, canonical, class_assignments, teacher_assignments,
+                     base_count, alt_count, classes, teachers, D, P, phase2_vals):
+    """Phase 3: fix group lessons, re-optimize non-group lessons to minimize teacher windows.
+
+    phase2_vals: {a_i: {'base': [(d,p),...], 'xa': [(d,p),...], 'xb2': [(d,p),...]}}
+    Returns same-format dict for non-group assignments only, or None if failed/no improvement possible.
+    """
+    ng_set = frozenset(a_i for a_i, a in enumerate(assignments) if a.group is None)
+    if not ng_set:
+        return None
+    # No gap optimization possible if no non-group lesson has alternating weeks
+    if not any(alt_count[a_i] for a_i in ng_set):
+        return None
+
+    # Precompute fixed group occupancy from Phase 2
+    fixed_t_A:   dict = defaultdict(bool)   # (t_pk, d, p) -> bool  week A
+    fixed_t_B:   dict = defaultdict(bool)   # (t_pk, d, p) -> bool  week B
+    fixed_cls_A: dict = defaultdict(bool)   # (cls_pk, d, p) -> bool
+    fixed_cls_B: dict = defaultdict(bool)
+
+    for a_i, a in enumerate(assignments):
+        if a.group is None:
+            continue
+        for d, p in phase2_vals[a_i]['base']:
+            fixed_t_A[a.teacher_id, d, p]        = True
+            fixed_t_B[a.teacher_id, d, p]        = True
+            fixed_cls_A[a.school_class_id, d, p] = True
+            fixed_cls_B[a.school_class_id, d, p] = True
+        for d, p in phase2_vals[a_i]['xa']:
+            fixed_t_A[a.teacher_id, d, p]        = True
+            fixed_cls_A[a.school_class_id, d, p] = True
+        for d, p in phase2_vals[a_i]['xb2']:
+            fixed_t_B[a.teacher_id, d, p]        = True
+            fixed_cls_B[a.school_class_id, d, p] = True
+
+    model = cp_model.CpModel()
+    xb3:  dict = {}
+    xa3:  dict = {}
+    xb23: dict = {}
+
+    for a_i in ng_set:
+        for d in range(D):
+            for p in range(P):
+                xb3[a_i, d, p] = model.new_bool_var(f'p3b_{a_i}_{d}_{p}')
+                if alt_count[a_i]:
+                    xa3[a_i, d, p]  = model.new_bool_var(f'p3a_{a_i}_{d}_{p}')
+                    xb23[a_i, d, p] = model.new_bool_var(f'p3b2_{a_i}_{d}_{p}')
+                else:
+                    xa3[a_i, d, p]  = 0
+                    xb23[a_i, d, p] = 0
+
+    def vA(a_i, d, p):
+        v = [xb3[a_i, d, p]]
+        if alt_count[a_i]:
+            v.append(xa3[a_i, d, p])
+        return v
+
+    def vB(a_i, d, p):
+        v = [xb3[a_i, d, p]]
+        if alt_count[a_i]:
+            v.append(xb23[a_i, d, p])
+        return v
+
+    def _cum_max(tag, a, b):
+        if isinstance(a, int) and isinstance(b, int):
+            return max(a, b)
+        if isinstance(a, int) and a == 1:
+            return 1
+        if isinstance(b, int) and b == 1:
+            return 1
+        if isinstance(a, int) and a == 0:
+            return b
+        if isinstance(b, int) and b == 0:
+            return a
+        v = model.new_bool_var(tag)
+        model.add_max_equality(v, [a, b])
+        return v
+
+    # 1. Lesson counts
+    for a_i in ng_set:
+        model.add(sum(xb3[a_i, d, p] for d in range(D) for p in range(P)) == base_count[a_i])
+        if alt_count[a_i]:
+            model.add(sum(xa3[a_i, d, p] + xb23[a_i, d, p]
+                          for d in range(D) for p in range(P)) == 1)
+            for d in range(D):
+                for p in range(P):
+                    model.add(xa3[a_i, d, p] + xb23[a_i, d, p] <= 1)
+
+    # 2. Class conflict (non-group vs non-group + fixed group)
+    for c in classes:
+        ng_c = [a_i for a_i in class_assignments[c.pk] if a_i in ng_set]
+        if not ng_c:
+            continue
+        for d in range(D):
+            for p in range(P):
+                fix_A = int(fixed_cls_A[c.pk, d, p])
+                fix_B = int(fixed_cls_B[c.pk, d, p])
+                model.add(cp_model.LinearExpr.Sum([v for a_i in ng_c for v in vA(a_i, d, p)]) + fix_A <= 1)
+                model.add(cp_model.LinearExpr.Sum([v for a_i in ng_c for v in vB(a_i, d, p)]) + fix_B <= 1)
+
+    # 3. Teacher conflict
+    for t in teachers:
+        ng_t = [a_i for a_i in teacher_assignments[t.pk] if a_i in ng_set]
+        if not ng_t:
+            continue
+        for d in range(D):
+            for p in range(P):
+                fix_A = int(fixed_t_A[t.pk, d, p])
+                fix_B = int(fixed_t_B[t.pk, d, p])
+                model.add(cp_model.LinearExpr.Sum([v for a_i in ng_t for v in vA(a_i, d, p)]) + fix_A <= 1)
+                model.add(cp_model.LinearExpr.Sum([v for a_i in ng_t for v in vB(a_i, d, p)]) + fix_B <= 1)
+
+    # 4. Teacher availability
+    for a_i in ng_set:
+        mask = _avail_mask(assignments[a_i].teacher, D)
+        for d in range(D):
+            if mask[d] != '1':
+                for p in range(P):
+                    model.add(xb3[a_i, d, p] == 0)
+                    if alt_count[a_i]:
+                        model.add(xa3[a_i, d, p]  == 0)
+                        model.add(xb23[a_i, d, p] == 0)
+
+    # 5. Max lessons per day (fixed group + non-group <= max)
+    for t in teachers:
+        ng_t = [a_i for a_i in teacher_assignments[t.pk] if a_i in ng_set]
+        if not ng_t:
+            continue
+        for d in range(D):
+            fix_A = sum(int(fixed_t_A[t.pk, d, p]) for p in range(P))
+            fix_B = sum(int(fixed_t_B[t.pk, d, p]) for p in range(P))
+            ng_A = [v for a_i in ng_t for p in range(P) for v in vA(a_i, d, p)]
+            ng_B = [v for a_i in ng_t for p in range(P) for v in vB(a_i, d, p)]
+            model.add(cp_model.LinearExpr.Sum(ng_A) + fix_A <= t.max_lessons_per_day)
+            model.add(cp_model.LinearExpr.Sum(ng_B) + fix_B <= t.max_lessons_per_day)
+
+    # 6. Per-day lesson count: use Phase 2 actuals as reference (±1 flexibility).
+    #    Count UNIQUE slots per day (not assignment entries) to avoid double-counting
+    #    cross-teacher paired groups — g1 and g2 occupy the SAME (d,p) slot but are
+    #    two separate assignments, so naively summing entries overcounts them.
+    for c in classes:
+        ng_c = [a_i for a_i in class_assignments[c.pk] if a_i in ng_set]
+        if not ng_c:
+            continue
+        # Unique occupied slots per day (cross-teacher pairs share one slot → count once)
+        slots_A: dict = defaultdict(set)
+        slots_B: dict = defaultdict(set)
+        for a_i in class_assignments[c.pk]:
+            for d2, p2 in phase2_vals[a_i]['base']:
+                slots_A[d2].add(p2)
+                slots_B[d2].add(p2)
+            for d2, p2 in phase2_vals[a_i]['xa']:
+                slots_A[d2].add(p2)
+            for d2, p2 in phase2_vals[a_i]['xb2']:
+                slots_B[d2].add(p2)
+        for d in range(D):
+            fix_A = sum(int(fixed_cls_A[c.pk, d, p]) for p in range(P))
+            fix_B = sum(int(fixed_cls_B[c.pk, d, p]) for p in range(P))
+            ng_A = [v for a_i in ng_c for p in range(P) for v in vA(a_i, d, p)]
+            ng_B = [v for a_i in ng_c for p in range(P) for v in vB(a_i, d, p)]
+            tgt_A = max(0, len(slots_A[d]) - fix_A)
+            tgt_B = max(0, len(slots_B[d]) - fix_B)
+            if ng_A:
+                model.add(cp_model.LinearExpr.Sum(ng_A) >= max(0, tgt_A - 1))
+                model.add(cp_model.LinearExpr.Sum(ng_A) <= tgt_A + 1)
+            if ng_B:
+                model.add(cp_model.LinearExpr.Sum(ng_B) >= max(0, tgt_B - 1))
+                model.add(cp_model.LinearExpr.Sum(ng_B) <= tgt_B + 1)
+
+    # 7. No same-day repeats for non-double subjects
+    for a_i in ng_set:
+        a = assignments[a_i]
+        if a.subject.can_be_double:
+            continue
+        total = base_count[a_i] + alt_count[a_i]
+        if total <= 1:
+            continue
+        for d in range(D):
+            model.add(cp_model.LinearExpr.Sum([v for p in range(P) for v in vA(a_i, d, p)]) <= 1)
+            model.add(cp_model.LinearExpr.Sum([v for p in range(P) for v in vB(a_i, d, p)]) <= 1)
+
+    # 8. No windows for students: combined (fixed group + non-group) occupancy must be
+    #    consecutive from period 0. Phase 2 guarantees this for its solution, so
+    #    Phase 3 is always FEASIBLE (Phase 2 values as hints satisfy this constraint).
+    for c in classes:
+        ng_c = [a_i for a_i in class_assignments[c.pk] if a_i in ng_set]
+        if not ng_c:
+            continue
+        for d in range(D):
+            for wk, fixed_cls, vfn in (('A', fixed_cls_A, vA), ('B', fixed_cls_B, vB)):
+                # Build combined occupancy per period
+                occ: list = []
+                for p in range(P):
+                    fix_p = int(fixed_cls[c.pk, d, p])
+                    if fix_p:
+                        occ.append(1)
+                    else:
+                        ng_p = [v for a_i in ng_c for v in vfn(a_i, d, p)]
+                        if not ng_p:
+                            occ.append(0)
+                        else:
+                            bv = model.new_bool_var(f'p3oc{wk}_{c.pk}_{d}_{p}')
+                            model.add_max_equality(bv, ng_p)
+                            occ.append(bv)
+
+                # Backward cumulative max: after_max[p] = 1 if any lesson at period > p
+                after_max: list = [None] * P
+                after_max[P - 1] = 0
+                for p in range(P - 2, -1, -1):
+                    after_max[p] = _cum_max(f'p3am{wk}_{c.pk}_{d}_{p}', occ[p + 1], after_max[p + 1])
+
+                # No-window: if anything after p, period p must be occupied
+                for p in range(P - 1):
+                    am = after_max[p]
+                    o  = occ[p]
+                    if isinstance(am, int) and am == 0:
+                        continue   # nothing after p → no constraint
+                    if isinstance(o, int) and o == 1:
+                        continue   # already occupied
+                    if isinstance(o, int) and o == 0:
+                        # No lesson can go here; force nothing after either
+                        if not (isinstance(am, int) and am == 0):
+                            model.add(am == 0)
+                        continue
+                    # o is a BoolVar
+                    if isinstance(am, int) and am == 1:
+                        model.add(o == 1)
+                    else:
+                        model.add(o >= am)
+
+    # Objective: minimize teacher windows (gaps) in combined schedule
+    obj_gaps: list = []
+    for t in teachers:
+        ng_t  = [a_i for a_i in teacher_assignments[t.pk] if a_i in ng_set]
+        t_mask = _avail_mask(t, D)
+        for d in range(D):
+            if t_mask[d] != '1':
+                continue
+            has_t: list = []
+            for p in range(P):
+                fix_p = int(fixed_t_A[t.pk, d, p])
+                ng_p  = [v for a_i in ng_t for v in vA(a_i, d, p)]
+                if fix_p:
+                    has_t.append(1)
+                elif ng_p:
+                    bv = model.new_bool_var(f'p3th_{t.pk}_{d}_{p}')
+                    model.add_max_equality(bv, ng_p)
+                    has_t.append(bv)
+                else:
+                    has_t.append(0)
+
+            if P < 3:
+                continue
+
+            occ_before: list = [None] * P
+            occ_before[1] = has_t[0]
+            for p in range(2, P):
+                occ_before[p] = _cum_max(f'p3ob_{t.pk}_{d}_{p}', occ_before[p - 1], has_t[p - 1])
+
+            occ_after: list = [None] * P
+            occ_after[P - 2] = has_t[P - 1]
+            for p in range(P - 3, -1, -1):
+                occ_after[p] = _cum_max(f'p3oa_{t.pk}_{d}_{p}', occ_after[p + 1], has_t[p + 1])
+
+            for p in range(1, P - 1):
+                ht = has_t[p]
+                ob = occ_before[p]
+                oa = occ_after[p]
+                if isinstance(ht, int) and ht == 1:
+                    continue   # always occupied, no gap
+                if isinstance(ob, int) and ob == 0:
+                    continue   # nothing before
+                if isinstance(oa, int) and oa == 0:
+                    continue   # nothing after
+                # gap = ob AND NOT ht AND oa
+                not_ht = ht.Not() if not isinstance(ht, int) else (1 - ht)
+                parts = [x for x in (ob, not_ht, oa)
+                         if not (isinstance(x, int) and x == 1)]
+                if any(isinstance(x, int) and x == 0 for x in parts):
+                    continue   # gap always 0
+                gap = model.new_bool_var(f'p3gap_{t.pk}_{d}_{p}')
+                var_parts = [x for x in parts if not isinstance(x, int)]
+                if var_parts:
+                    model.add_min_equality(gap, var_parts)
+                else:
+                    model.add(gap == 1)
+                obj_gaps.append(gap)
+
+    if not obj_gaps:
+        return None   # no gaps possible to optimize
+
+    model.minimize(cp_model.LinearExpr.Sum(obj_gaps))
+
+    # Hints from Phase 2 solution
+    for a_i in ng_set:
+        for d, p in phase2_vals[a_i]['base']:
+            model.add_hint(xb3[a_i, d, p], 1)
+        if alt_count[a_i]:
+            for d, p in phase2_vals[a_i]['xa']:
+                model.add_hint(xa3[a_i, d, p], 1)
+            for d, p in phase2_vals[a_i]['xb2']:
+                model.add_hint(xb23[a_i, d, p], 1)
+
+    solver3 = cp_model.CpSolver()
+    solver3.parameters.max_time_in_seconds = 30.0
+    solver3.parameters.num_search_workers = 8
+    solver3.parameters.log_search_progress = False
+    status = solver3.solve(model)
+
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None
+
+    result: dict = {}
+    for a_i in ng_set:
+        base_s: list = []
+        xa_s:   list = []
+        xb2_s:  list = []
+        for d in range(D):
+            for p in range(P):
+                if solver3.value(xb3[a_i, d, p]):
+                    base_s.append((d, p))
+                if alt_count[a_i]:
+                    if solver3.value(xa3[a_i, d, p]):
+                        xa_s.append((d, p))
+                    if solver3.value(xb23[a_i, d, p]):
+                        xb2_s.append((d, p))
+        result[a_i] = {'base': base_s, 'xa': xa_s, 'xb2': xb2_s}
+    return result
+
+
+def _find_cross_subj_pairs(group_map, assignments, base_count, alt_count):
+    """Find cross-subject pairing opportunities between same-teacher and cross-teacher subjects.
+
+    Groups all same-teacher subjects by teacher, then matches each TEACHER GROUP (not
+    individual subject) to a cross-teacher subject, prioritising the teacher with the
+    most total hours (so the busiest same-teacher teacher gets paired first).
+
+      Slot A: T teaches any g1 subject + cross_g2 teacher teaches g2
+      Slot B: T teaches any g2 subject + cross_g1 teacher teaches g1
+
+    When T's total hours differ from the cross-teacher subject's hours, partial pairing
+    is used: the side with fewer slots gets an implication constraint (its slots are a
+    subset of the partner's slots), rather than a full equality constraint.
+
+    Returns:
+      pairs: list of (s_g1_ais, s_g2_ais, c_g1, c_g2, mode)
+             s_g1_ais / s_g2_ais — lists of all g1/g2 assignment indices for same-T teacher
+             c_g1 / c_g2         — single assignment indices for cross-teacher subject
+             mode                — 'equal' or 'partial'
+      matched_cross_keys: set of (cls_pk, subj_pk) for matched cross-teacher subjects
+      matched_same_keys:  set of (cls_pk, subj_pk) for matched same-teacher subjects
+    """
+    # Group by class
+    cls_subjects: dict = defaultdict(dict)  # cls_pk -> {subj_pk: gmap}
+    for (cls_pk, subj_pk), gmap in group_map.items():
+        cls_subjects[cls_pk][subj_pk] = gmap
+
+    pairs = []
+    matched_cross_keys: set = set()
+    matched_same_keys:  set = set()
+
+    for cls_pk, subj_map in cls_subjects.items():
+        # Group same-teacher subjects by teacher id: t_id → {'g1_ais': [...], 'g2_ais': [...]}
+        same_by_teacher: dict = defaultdict(lambda: {'g1_ais': [], 'g2_ais': [], 'subj_pks': []})
+        cross_teacher_subjs = []  # [(subj_pk, g1_ai, g2_ai, teacher_ids_set)]
+
+        for subj_pk, gmap in subj_map.items():
+            g_nums = sorted(gmap.keys())
+            if len(g_nums) != 2:
+                continue
+            g1_ai = gmap[g_nums[0]]
+            g2_ai = gmap[g_nums[1]]
+            t1 = assignments[g1_ai].teacher_id
+            t2 = assignments[g2_ai].teacher_id
+            if t1 == t2:
+                same_by_teacher[t1]['g1_ais'].append(g1_ai)
+                same_by_teacher[t1]['g2_ais'].append(g2_ai)
+                same_by_teacher[t1]['subj_pks'].append(subj_pk)
+            else:
+                cross_teacher_subjs.append((subj_pk, g1_ai, g2_ai, {t1, t2}))
+
+        # Sort same-teacher groups by total hours descending (busiest teacher first)
+        sorted_same = sorted(
+            same_by_teacher.items(),
+            key=lambda kv: sum(base_count[ai] + alt_count[ai] for ai in kv[1]['g1_ais']),
+            reverse=True,
+        )
+
+        used_cross: set = set()
+        matched_s_tids: set = set()  # teachers already matched as "s" side
+
+        # Phase A: same-teacher ↔ cross-teacher pairing (priority)
+        for t_id, tdata in sorted_same:
+            g1_ais = tdata['g1_ais']
+            g2_ais = tdata['g2_ais']
+            t_base = sum(base_count[ai] for ai in g1_ais)
+            t_alt  = sum(alt_count[ai]  for ai in g1_ais)
+
+            for idx, (c_subj_pk, c_g1, c_g2, c_tids) in enumerate(cross_teacher_subjs):
+                if idx in used_cross:
+                    continue
+                if (cls_pk, c_subj_pk) in matched_cross_keys:
+                    continue
+                # Teacher conflict: same-teacher must not be in cross-teacher's teacher set
+                if t_id in c_tids:
+                    continue
+
+                c_base = base_count[c_g1]
+                c_alt  = alt_count[c_g1]
+                mode = 'equal' if (t_base == c_base and t_alt == c_alt) else 'partial'
+
+                # c_is_cross=True: cross-teacher "c" side — apply remaining co-scheduled if needed
+                pairs.append((g1_ais, g2_ais, c_g1, c_g2, mode, True))
+                matched_cross_keys.add((cls_pk, c_subj_pk))
+                for spk in tdata['subj_pks']:
+                    matched_same_keys.add((cls_pk, spk))
+                matched_s_tids.add(t_id)
+                used_cross.add(idx)
+                break  # each teacher group matches at most one cross-teacher subject
+
+        # Phase B: same-teacher ↔ same-teacher pairing (when no cross-teacher partner found).
+        # Pair the busiest unmatched teacher with the next busiest unmatched teacher.
+        # Direction: busier teacher (s side) has more total hours → cross presence ⊆ s presence.
+        # No "remaining co-scheduled" needed — the "c" teacher is same-teacher and never has
+        # both g1 and g2 at the same slot (teacher conflict).
+        used_c_tids: set = set()
+        for t_id, tdata in sorted_same:
+            if t_id in matched_s_tids:
+                continue
+            if t_id in used_c_tids:
+                continue  # already used as "c" partner — don't re-pair as "s"
+            g1_ais = tdata['g1_ais']
+            g2_ais = tdata['g2_ais']
+            t_base = sum(base_count[ai] for ai in g1_ais)
+            t_alt  = sum(alt_count[ai]  for ai in g1_ais)
+
+            # Find best unmatched partner with fewer-or-equal total hours
+            best_partner = None
+            best_c_base = 0
+            for c_tid, cdata in sorted_same:
+                if c_tid == t_id:
+                    continue
+                if c_tid in matched_s_tids:
+                    continue
+                if c_tid in used_c_tids:
+                    continue
+                c_base_c = sum(base_count[ai] for ai in cdata['g1_ais'])
+                if t_base < c_base_c:
+                    continue  # s side must be at least as busy as c side
+                if c_base_c > best_c_base:
+                    best_partner = (c_tid, cdata, c_base_c)
+                    best_c_base = c_base_c
+
+            if best_partner is None:
+                continue
+
+            c_tid, cdata, c_base_c = best_partner
+            c_g1 = cdata['g1_ais'][0]
+            c_g2 = cdata['g2_ais'][0]
+            c_alt_c = sum(alt_count[ai] for ai in cdata['g1_ais'])
+            mode = 'equal' if (t_base == c_base_c and t_alt == c_alt_c) else 'partial'
+
+            # c_is_cross=False: same-teacher "c" side — no remaining co-scheduled
+            pairs.append((g1_ais, g2_ais, c_g1, c_g2, mode, False))
+            matched_s_tids.add(t_id)
+            used_c_tids.add(c_tid)
+
+    return pairs, matched_cross_keys, matched_same_keys
+
+
 def _solve_group_phase(assignments, group_map, class_assignments, teacher_assignments,
                        base_count, alt_count, classes, teachers, D, P,
-                       unpaired_edge: set | None = None) -> dict:
+                       unpaired_edge: set | None = None,
+                       cross_subj_pairs=None, matched_cross_keys=None) -> dict:
     """Phase 1: schedule group lessons only, maximising cross-teacher slot pairing.
 
     For each class, collects same-teacher group subjects (г1 and г2 taught by the
@@ -238,7 +758,7 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
 
         # Teacher availability
         for a_i in grp_set:
-            mask = assignments[a_i].teacher.available_days[:D].ljust(D, '0')
+            mask = _avail_mask(assignments[a_i].teacher, D)
             for d in range(D):
                 if mask[d] != '1':
                     for p in range(P):
@@ -257,8 +777,12 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
                 m.add(cp_model.LinearExpr.Sum([v for a_i in t_grp
                       for p in range(P) for v in vB(a_i, d, p)]) <= t.max_lessons_per_day)
 
+        _matched_ct = matched_cross_keys or set()
+
         # Co-scheduled groups (same subject, different teachers → same slot)
         for (cls_pk, subj_pk), gmap in group_map.items():
+            if (cls_pk, subj_pk) in _matched_ct:
+                continue  # handled by cross-subject pairing below
             g_ais = list(gmap.values())
             if len(g_ais) < 2: continue
             if len({assignments[a_i].teacher_id for a_i in g_ais}) <= 1: continue
@@ -273,6 +797,44 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
                             m.add(r_xa == o_xa)
                         if not (isinstance(r_xb2, int) and isinstance(o_xb2, int)):
                             m.add(r_xb2 == o_xb2)
+
+        # Cross-subject pairing: teacher group g1 ↔ cross_g2, teacher group g2 ↔ cross_g1
+        _cs_pairs = cross_subj_pairs or []
+        for (s_g1_ais, s_g2_ais, c_g1, c_g2, mode, c_is_cross) in _cs_pairs:
+            t_base = sum(base_count[ai] for ai in s_g1_ais)
+            c_base = base_count[c_g1]
+            _tag = f'{s_g1_ais[0]}_{c_g1}'
+            for d in range(D):
+                for p in range(P):
+                    if len(s_g1_ais) == 1:
+                        has_T_g1 = xb_[s_g1_ais[0], d, p]
+                        has_T_g2 = xb_[s_g2_ais[0], d, p]
+                    else:
+                        has_T_g1 = m.new_bool_var(f'p1htg1_{_tag}_{d}_{p}')
+                        m.add_max_equality(has_T_g1, [xb_[ai, d, p] for ai in s_g1_ais])
+                        has_T_g2 = m.new_bool_var(f'p1htg2_{_tag}_{d}_{p}')
+                        m.add_max_equality(has_T_g2, [xb_[ai, d, p] for ai in s_g2_ais])
+                    if mode == 'equal':
+                        m.add(has_T_g1 == xb_[c_g2, d, p])
+                        m.add(has_T_g2 == xb_[c_g1, d, p])
+                    elif t_base <= c_base:
+                        m.add(has_T_g1 <= xb_[c_g2, d, p])
+                        m.add(has_T_g2 <= xb_[c_g1, d, p])
+                    else:
+                        m.add(xb_[c_g2, d, p] <= has_T_g1)
+                        m.add(xb_[c_g1, d, p] <= has_T_g2)
+            # Partial: remaining cross-teacher slots must still be co-scheduled.
+            # Only for c_is_cross=True (cross-teacher "c" side can have both g1 and g2
+            # at the same slot). Not for same-same pairs — would be infeasible.
+            if mode == 'partial' and c_is_cross and c_base > t_base:
+                n_remaining = c_base - t_base
+                both_p1: list = []
+                for d in range(D):
+                    for p in range(P):
+                        both = m.new_bool_var(f'p1cs_rg_{_tag}_{d}_{p}')
+                        m.add_min_equality(both, [xb_[c_g1, d, p], xb_[c_g2, d, p]])
+                        both_p1.append(both)
+                m.add(cp_model.LinearExpr.Sum(both_p1) >= n_remaining)
 
         anchor_obj: list = []
 
@@ -600,7 +1162,7 @@ def generate(schedule_id: int) -> tuple:
 
     # 4. Teacher availability
     for a_i, a in enumerate(assignments):
-        mask = a.teacher.available_days[:D].ljust(D, '0')
+        mask = _avail_mask(a.teacher, D)
         for d in range(D):
             if mask[d] != '1':
                 for p in range(P):
@@ -618,8 +1180,22 @@ def generate(schedule_id: int) -> tuple:
             model.add(cp_model.LinearExpr.Sum(tdA) <= t.max_lessons_per_day)
             model.add(cp_model.LinearExpr.Sum(tdB) <= t.max_lessons_per_day)
 
+    # Find cross-subject pairs (must be before constraint 6 and Phase 1 calls)
+    cs_pairs, matched_cross_keys, matched_same_keys = _find_cross_subj_pairs(
+        group_map, assignments, base_count, alt_count
+    )
+    _log(f'cross_subj_pairs={len(cs_pairs)}: ' + ', '.join(
+        f"{assignments[s_g1_ais[0]].school_class}/"
+        f"{'+'.join(assignments[ai].subject.short_name or assignments[ai].subject.name for ai in s_g1_ais)}"
+        f"\u2194{assignments[c_g1].subject.short_name or assignments[c_g1].subject.name}"
+        f"({'eq' if mode == 'equal' else 'part'})"
+        for s_g1_ais, s_g2_ais, c_g1, c_g2, mode, c_is_cross in cs_pairs
+    ))
+
     # 6. Group co-scheduling (same slot for all groups, both xb and xa/xb2)
     for (cls_pk, subj_pk), gmap in group_map.items():
+        if (cls_pk, subj_pk) in matched_cross_keys:
+            continue  # handled by cross-subject pairing below
         group_ais = list(gmap.values())
         if len(group_ais) >= 2:
             teacher_ids = {assignments[a_i].teacher_id for a_i in group_ais}
@@ -635,6 +1211,53 @@ def generate(schedule_id: int) -> tuple:
                                 model.add(r_xa == o_xa)
                             if not (isinstance(r_xb2, int) and isinstance(o_xb2, int)):
                                 model.add(r_xb2 == o_xb2)
+
+    # Cross-subject pairing (Phase 2): teacher group g1 slots ↔ cross_g2, and vice versa.
+    # s_g1_ais / s_g2_ais — all same-teacher assignments for g1 / g2 of the matched teacher.
+    for (s_g1_ais, s_g2_ais, c_g1, c_g2, mode, c_is_cross) in cs_pairs:
+        t_base = sum(base_count[ai] for ai in s_g1_ais)
+        c_base = base_count[c_g1]
+
+        # Tag for unique bool var names
+        _tag = f'{s_g1_ais[0]}_{c_g1}'
+
+        for d in range(D):
+            for p in range(P):
+                if len(s_g1_ais) == 1:
+                    has_T_g1 = xb[s_g1_ais[0], d, p]
+                    has_T_g2 = xb[s_g2_ais[0], d, p]
+                else:
+                    has_T_g1 = model.new_bool_var(f'htg1_{_tag}_{d}_{p}')
+                    model.add_max_equality(has_T_g1, [xb[ai, d, p] for ai in s_g1_ais])
+                    has_T_g2 = model.new_bool_var(f'htg2_{_tag}_{d}_{p}')
+                    model.add_max_equality(has_T_g2, [xb[ai, d, p] for ai in s_g2_ais])
+
+                if mode == 'equal':
+                    model.add(has_T_g1 == xb[c_g2, d, p])
+                    model.add(has_T_g2 == xb[c_g1, d, p])
+                elif t_base <= c_base:
+                    # T has fewer slots → T's presence ⊆ cross presence
+                    model.add(has_T_g1 <= xb[c_g2, d, p])
+                    model.add(has_T_g2 <= xb[c_g1, d, p])
+                else:
+                    # T has more slots → cross presence ⊆ T's presence
+                    model.add(xb[c_g2, d, p] <= has_T_g1)
+                    model.add(xb[c_g1, d, p] <= has_T_g2)
+
+        # For partial mode where cross-teacher has MORE slots than T (c_base > t_base):
+        # the remaining (c_base - t_base) cross-teacher slots must still be co-scheduled
+        # between c_g1 and c_g2 (equivalent to regular same-slot pairing for those slots).
+        # This does NOT apply to same-same pairs (c_is_cross=False) because the "c" teacher
+        # is also same-teacher and never schedules g1/g2 at the same slot anyway.
+        if mode == 'partial' and c_is_cross and c_base > t_base:
+            n_remaining = c_base - t_base
+            both_vars: list = []
+            for d in range(D):
+                for p in range(P):
+                    both = model.new_bool_var(f'cs_rg_{_tag}_{d}_{p}')
+                    model.add_min_equality(both, [xb[c_g1, d, p], xb[c_g2, d, p]])
+                    both_vars.append(both)
+            model.add(cp_model.LinearExpr.Sum(both_vars) >= n_remaining)
 
     # 6b. Subject-level pairing consistency (hard):
     # Cross-teacher g1↔g2 pairing must be symmetric per subject: slots where teacher T's
@@ -1003,6 +1626,7 @@ def generate(schedule_id: int) -> tuple:
         assignments, group_map, class_assignments, teacher_assignments,
         base_count, alt_count, classes, teachers, D, P,
         unpaired_edge=unpaired_all,
+        cross_subj_pairs=cs_pairs, matched_cross_keys=matched_cross_keys,
     )
     _log('phase1a done')
 
@@ -1051,6 +1675,7 @@ def generate(schedule_id: int) -> tuple:
         assignments, group_map, class_assignments, teacher_assignments,
         base_count, alt_count, classes, teachers, D, P,
         unpaired_edge=actually_unpaired,
+        cross_subj_pairs=cs_pairs, matched_cross_keys=matched_cross_keys,
     )
     _log('phase1b done, applying hints')
 
@@ -1091,32 +1716,35 @@ def generate(schedule_id: int) -> tuple:
                 model.add_hint(pv, int(is_paired))
 
     # -------------------------------------------------------------------------
-    # Objective — three tiers (PAIR >> CLUSTER >> EDGE):
+    # Objective — three tiers (PAIR >> ROOM_PAIR >> CLUSTER/EDGE):
     #
     # 1. PAIR_WEIGHT (1000): pairing bonuses — never sacrifice a grouping bond.
     #    + obj_same_day: split groups from same teacher on same day
     #    + obj_anchor:   follower-slot aligned with anchor teacher
     #
-    # 2. CLUSTER_WEIGHT (100): anti-clustering for unpaired lessons.
+    # 2. ROOM_PAIR_WEIGHT (300): same-grade PE/shared-room co-scheduling.
+    #
+    # 3. CLUSTER_WEIGHT (100): anti-clustering for unpaired lessons.
     #    When a class has unpaired lessons from multiple subjects (e.g. 4А:
     #    Укр.мова, ЯДС, Укр.літ — all taught by one teacher to both groups),
     #    reward NOT scheduling two different subject-groups on the same day.
     #    This spreads them so each day has at most one g1+g2 pair, leaving
     #    both edge slots free for that pair.
     #
-    # 3. EDGE_WEIGHT (100): V-shaped edge reward for each unpaired lesson.
+    #    EDGE_WEIGHT (100): V-shaped edge reward for each unpaired lesson.
     #    Reward = (P-1 − 2·min(p, P-1−p)) — max at period 0 and P−1, zero
     #    at centre.  Naturally pushes g1 → period 0, g2 → period P−1.
     #    Must be large enough that the 2-point gap between adjacent periods
     #    outweighs any residual slack in FEASIBLE (non-OPTIMAL) solutions.
     PAIR_WEIGHT      = 1000
-    ROOM_PAIR_WEIGHT = 300   # same-grade room pairing: above cluster/edge, below teacher groups
+    ROOM_PAIR_WEIGHT = 300   # same-grade room pairing: above cluster/edge
     CLUSTER_WEIGHT   = 100
     EDGE_WEIGHT      = 100
 
-    all_obj_vars: list = list(obj_same_day) + list(obj_anchor) + list(obj_same_grade_room)
-    all_obj_wts:  list = ([PAIR_WEIGHT]      * len(obj_same_day)
-                          + [PAIR_WEIGHT]    * len(obj_anchor)
+    all_obj_vars: list = (list(obj_same_day) + list(obj_anchor)
+                          + list(obj_same_grade_room))
+    all_obj_wts:  list = ([PAIR_WEIGHT]        * len(obj_same_day)
+                          + [PAIR_WEIGHT]      * len(obj_anchor)
                           + [ROOM_PAIR_WEIGHT] * len(obj_same_grade_room))
 
     if actually_unpaired and P >= 3:
@@ -1213,7 +1841,7 @@ def generate(schedule_id: int) -> tuple:
 
     # -------------------------------------------------------------------------
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 40.0
+    solver.parameters.max_time_in_seconds = 60.0
     solver.parameters.num_search_workers = 8
     solver.parameters.log_search_progress = False
 
@@ -1263,6 +1891,37 @@ def generate(schedule_id: int) -> tuple:
                         edge = '✓' if p in (p_first, p_last) else f'✗ (треба {p_first} або {p_last})'
                         _log(f'  unp #{a_i} {a.school_class} {a.subject} гр.{a.group} '
                              f'| {day_names[d]} ур.{p+1} {edge}')
+
+    # -------------------------------------------------------------------------
+    # Extract Phase 2 solution → run Phase 3 (gap optimization for non-group lessons)
+    # -------------------------------------------------------------------------
+    _log('extracting phase2 solution')
+    final_vals: dict = {}
+    for a_i2 in range(len(assignments)):
+        base_s: list = []
+        xa_s:   list = []
+        xb2_s:  list = []
+        for d2 in range(D):
+            for p2 in range(P):
+                if solver.value(xb[a_i2, d2, p2]):
+                    base_s.append((d2, p2))
+                if alt_count[a_i2]:
+                    if solver.value(xa[a_i2, d2, p2]):
+                        xa_s.append((d2, p2))
+                    if solver.value(xb2[a_i2, d2, p2]):
+                        xb2_s.append((d2, p2))
+        final_vals[a_i2] = {'base': base_s, 'xa': xa_s, 'xb2': xb2_s}
+
+    _log('phase3 start')
+    phase3_result = _solve_gap_phase(
+        assignments, canonical, class_assignments, teacher_assignments,
+        base_count, alt_count, classes, teachers, D, P, final_vals,
+    )
+    if phase3_result:
+        final_vals.update(phase3_result)
+        _log(f'phase3 done: non-group lessons re-optimized for {len(phase3_result)} assignments')
+    else:
+        _log('phase3 skipped or failed, using phase2 solution')
 
     # -------------------------------------------------------------------------
     # Room assignment
@@ -1322,17 +1981,14 @@ def generate(schedule_id: int) -> tuple:
     alt_b_sched = []   # week B only
 
     for a_i, a in enumerate(assignments):
-
         gk = a.school_class.grade if a.subject_id in shared_subj_ids else 0
-        for d in range(D):
-            for p in range(P):
-                if solver.value(xb[a_i, d, p]):
-                    base_sched.append((d, p, gk, a_i))
-                if alt_count[a_i]:
-                    if solver.value(xa[a_i, d, p]):
-                        alt_a_sched.append((d, p, gk, a_i))
-                    if solver.value(xb2[a_i, d, p]):
-                        alt_b_sched.append((d, p, gk, a_i))
+        fv = final_vals[a_i]
+        for d, p in fv['base']:
+            base_sched.append((d, p, gk, a_i))
+        for d, p in fv['xa']:
+            alt_a_sched.append((d, p, gk, a_i))
+        for d, p in fv['xb2']:
+            alt_b_sched.append((d, p, gk, a_i))
 
     def _make_room_sort_key(sched):
         # Within each slot: process grades that appear 2+ times first so same-grade

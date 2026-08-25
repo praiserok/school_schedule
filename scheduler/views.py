@@ -583,11 +583,11 @@ def _validate_move(schedule, lesson, new_day, new_period, swap=None):
         if new_day_periods[0] != 0 or new_day_periods != list(range(len(new_day_periods))):
             errors.append(f'Клас {lesson.school_class}: виникне вікно в {new_day + 1}-й день')
 
-        # Старий день: прибираємо lesson
+        # Старий день: прибираємо lesson (унікальні слоти — групові уроки займають один слот двома записами)
         if lesson.day != new_day:
-            old_periods = sorted(Lesson.objects.filter(
+            old_periods = sorted(set(Lesson.objects.filter(
                 schedule=schedule, school_class=lesson.school_class, week=week, day=lesson.day
-            ).exclude(pk=lesson.pk).values_list('period', flat=True))
+            ).exclude(pk__in=exclude).values_list('period', flat=True)))
             if old_periods and (old_periods[0] != 0 or old_periods != list(range(len(old_periods)))):
                 errors.append(f'Клас {lesson.school_class}: виникне вікно в {lesson.day + 1}-й день після переміщення')
 
