@@ -1,0 +1,24 @@
+# Замінити 'school-schedule-app' на своє унікальне ім'я: fly apps create school-schedule-YOUR-NAME
+app = 'school-schedule-app'
+primary_region = 'waw'
+
+[build]
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'
+
+[mounts]
+  source = 'school_schedule_data'
+  destination = '/data'
+  initial_size = '1gb'
