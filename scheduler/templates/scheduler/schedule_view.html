@@ -122,9 +122,22 @@
               data-period="{{ p }}"
               style="padding:2px;">
             {% if cell.week_a %}
-            <div style="border-left:3px solid {{ cell.week_a.subject.color }};background:{{ cell.week_a.subject.color }}22;padding:3px 5px;margin-bottom:2px;border-radius:3px;">
-              <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
-              <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_a.subject.short_name|default:cell.week_a.subject.name }}</span>
+            <div class="sch-alt-lesson" data-lid="{{ cell.week_a.pk }}"
+                 style="border-left:3px solid {{ cell.week_a.subject.color }};background:{{ cell.week_a.subject.color }}22;padding:3px 5px;margin-bottom:2px;border-radius:3px;">
+              <div class="d-flex align-items-center gap-1">
+                <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
+                <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_a.subject.short_name|default:cell.week_a.subject.name }}</span>
+                <button class="btn-toggle-week d-none ms-auto" data-lid="{{ cell.week_a.pk }}"
+                        style="border:none;background:none;padding:0 2px;line-height:1;color:#6f42c1;font-size:.72rem;"
+                        title="Змінити тиждень (А↔Б)" onclick="event.stopPropagation();">
+                  <i class="bi bi-arrow-left-right"></i>
+                </button>
+                <button class="btn-room-edit d-none" data-lid="{{ cell.week_a.pk }}"
+                        style="border:none;background:none;padding:0 2px;line-height:1;color:#6c757d;font-size:.72rem;"
+                        title="Змінити кабінет" onclick="event.stopPropagation();">
+                  <i class="bi bi-pencil"></i>
+                </button>
+              </div>
               <div style="font-size:.72rem;">
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_a.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.week_a.teacher }}</a>
@@ -134,9 +147,22 @@
             </div>
             {% endif %}
             {% if cell.week_b %}
-            <div style="border-left:3px solid {{ cell.week_b.subject.color }};background:{{ cell.week_b.subject.color }}22;padding:3px 5px;border-radius:3px;">
-              <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
-              <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_b.subject.short_name|default:cell.week_b.subject.name }}</span>
+            <div class="sch-alt-lesson" data-lid="{{ cell.week_b.pk }}"
+                 style="border-left:3px solid {{ cell.week_b.subject.color }};background:{{ cell.week_b.subject.color }}22;padding:3px 5px;border-radius:3px;">
+              <div class="d-flex align-items-center gap-1">
+                <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
+                <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_b.subject.short_name|default:cell.week_b.subject.name }}</span>
+                <button class="btn-toggle-week d-none ms-auto" data-lid="{{ cell.week_b.pk }}"
+                        style="border:none;background:none;padding:0 2px;line-height:1;color:#6f42c1;font-size:.72rem;"
+                        title="Змінити тиждень (А↔Б)" onclick="event.stopPropagation();">
+                  <i class="bi bi-arrow-left-right"></i>
+                </button>
+                <button class="btn-room-edit d-none" data-lid="{{ cell.week_b.pk }}"
+                        style="border:none;background:none;padding:0 2px;line-height:1;color:#6c757d;font-size:.72rem;"
+                        title="Змінити кабінет" onclick="event.stopPropagation();">
+                  <i class="bi bi-pencil"></i>
+                </button>
+              </div>
               <div style="font-size:.72rem;">
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_b.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.week_b.teacher }}</a>
@@ -180,6 +206,13 @@
                           title="Змінити кабінет" onclick="event.stopPropagation();">
                     <i class="bi bi-pencil"></i>
                   </button>
+                  {% if lesson.group and not cell.extra %}
+                  <button class="btn-pair-sibling d-none" data-lid="{{ lesson.pk }}"
+                          style="border:none;background:none;padding:0 2px;line-height:1;color:#0d6efd;font-size:.72rem;"
+                          title="Підтягнути другу групу сюди" onclick="event.stopPropagation();">
+                    <i class="bi bi-plus-circle"></i>
+                  </button>
+                  {% endif %}
                 </div>
               </div>
               {% if cell.extra %}
@@ -230,7 +263,9 @@
 </div>
 <script>
 (function () {
-  const MOVE_URL = "{% url 'scheduler:lesson_move' schedule.pk %}";
+  const MOVE_URL        = "{% url 'scheduler:lesson_move' schedule.pk %}";
+  const SIBLING_URL     = "{% url 'scheduler:lesson_sibling' schedule.pk %}";
+  const TOGGLE_WEEK_URL = "{% url 'scheduler:lesson_toggle_week' schedule.pk %}";
   const CSRF = "{{ csrf_token }}";
 
   let editMode  = false;
@@ -256,7 +291,7 @@
       : '<i class="bi bi-pencil-square me-1"></i>Редагувати';
     hint.classList.toggle('d-none', !editMode);
     clearSel();
-    document.querySelectorAll('.sch-cell, .sch-lesson').forEach(el => {
+    document.querySelectorAll('.sch-cell, .sch-lesson, .sch-alt-lesson').forEach(el => {
       el.style.cursor = editMode ? 'pointer' : '';
     });
   });
@@ -266,9 +301,9 @@
     td.addEventListener('click', function (e) {
       if (!editMode) return;
 
-      // Якщо клікнули на конкретний .sch-lesson — беремо його lid,
+      // Якщо клікнули на конкретний .sch-lesson або .sch-alt-lesson — беремо його lid,
       // інакше беремо data-lid самої td (single-lesson комірка).
-      const lessonDiv = e.target.closest('.sch-lesson');
+      const lessonDiv = e.target.closest('.sch-lesson, .sch-alt-lesson');
       const lid = (lessonDiv && lessonDiv.dataset.lid) || this.dataset.lid || null;
       const cls = this.dataset.cls;
       const day = this.dataset.day;
@@ -300,8 +335,10 @@
           showError('Можна переміщати тільки в межах одного класу');
           return;
         }
-        // targetLid — конкретний урок у цільовій комірці (якщо клік по .sch-lesson)
-        const targetLid = lessonDiv ? lessonDiv.dataset.lid : null;
+        // targetLid — тільки для .sch-lesson (swap груп). Для .sch-alt-lesson (тиждень А/Б)
+        // завжди plain move (без swap), щоб paired-уроки опинились в одному слоті.
+        const isAlt = lessonDiv && lessonDiv.classList.contains('sch-alt-lesson');
+        const targetLid = (!isAlt && lessonDiv) ? lessonDiv.dataset.lid : null;
         doMove(selLid, +day, +per, targetLid);
       }
     });
@@ -354,10 +391,52 @@
     bsToast.show();
   }
 
-  // ── Режим редагування: показати/сховати кнопки кабінету ─────────────────
+  // ── Режим редагування: показати/сховати кнопки ──────────────────────────
   toggleBtn.addEventListener('click', function () {
-    document.querySelectorAll('.btn-room-edit').forEach(btn => {
+    document.querySelectorAll('.btn-room-edit, .btn-pair-sibling, .btn-toggle-week').forEach(btn => {
       btn.classList.toggle('d-none', !editMode);
+    });
+  });
+
+  // ── Зміна тижня А↔Б ─────────────────────────────────────────────────────
+  document.querySelectorAll('.btn-toggle-week').forEach(btn => {
+    btn.addEventListener('click', function () {
+      const lid = this.dataset.lid;
+      fetch(TOGGLE_WEEK_URL, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+        body: JSON.stringify({lesson_id: lid}),
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) location.reload();
+        else showError(data.error || 'Помилка');
+      })
+      .catch(() => showError('Помилка зʼєднання'));
+    });
+  });
+
+  // ── Підтягнути сиблінг-групу сюди ───────────────────────────────────────
+  document.querySelectorAll('.btn-pair-sibling').forEach(btn => {
+    btn.addEventListener('click', function () {
+      const lid  = this.dataset.lid;
+      const cell = this.closest('.sch-cell');
+      const day  = +cell.dataset.day;
+      const per  = +cell.dataset.period;
+
+      fetch(`${SIBLING_URL}?lesson_id=${lid}`)
+        .then(r => r.json())
+        .then(data => {
+          if (!data.found) {
+            showError('Друга група вже в цьому слоті або не знайдена');
+            return;
+          }
+          const msg = `Гр.${data.sibling_group} зараз: ${data.sibling_day_name}, урок ${data.sibling_period + 1}.\nПідтягнути сюди?`;
+          if (confirm(msg)) {
+            doMove(data.sibling_id, day, per, null);
+          }
+        })
+        .catch(() => showError('Помилка зʼєднання'));
     });
   });
 

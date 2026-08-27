@@ -636,6 +636,25 @@ def lesson_move(request, pk):
     errors = _validate_move(schedule, lesson, new_day, new_period, swap)
     if swap:
         errors += _validate_move(schedule, swap, old_day, old_period, lesson)
+
+    # Для звичайного переміщення (не swap) групового уроку — знаходимо сиблінг-групу
+    # на тому ж слоті й рухаємо разом (group 1 + group 2 завжди переміщуються одним кроком).
+    sibling_pks = []
+    if lesson.group is not None and swap is None:
+        sibling_qs = (Lesson.objects
+                      .filter(schedule=schedule,
+                              school_class=lesson.school_class,
+                              subject=lesson.subject,
+                              day=old_day, period=old_period)
+                      .exclude(group=lesson.group)
+                      .exclude(group=None))
+        siblings = list(sibling_qs)
+        sibling_pks = [s.pk for s in siblings]
+        sibling_lesson = siblings[0] if siblings else None
+        if sibling_lesson:
+            sib_errors = _validate_move(schedule, sibling_lesson, new_day, new_period)
+            errors += [f'Гр.{sibling_lesson.group}: {e}' for e in sib_errors]
+
     if errors:
         return JsonResponse({'ok': False, 'errors': errors})
 
@@ -657,18 +676,16 @@ def lesson_move(request, pk):
     lesson_pks = list(lesson_family_qs.values_list('pk', flat=True))
     swap_pks = list(swap_family_qs.values_list('pk', flat=True)) if swap_family_qs is not None else []
 
-    # Three-step atomic swap через тимчасовий слот поза діапазоном розкладу.
-    # SQLite перевіряє UNIQUE після кожного рядка, тому послідовні save() однакового
-    # вчителя дають IntegrityError. filter().update() — прямий SQL без ORM-перевірок,
-    # а тимчасовий (D, P) гарантовано вільний (поза 0..D-1 / 0..P-1).
     D = schedule.days_per_week
     P = schedule.lessons_per_day
     with transaction.atomic():
         if swap_pks:
-            Lesson.objects.filter(pk__in=swap_pks).update(day=D, period=P)           # step 1: swap → temp
-        Lesson.objects.filter(pk__in=lesson_pks).update(day=new_day, period=new_period)  # step 2: lesson → ціль
+            Lesson.objects.filter(pk__in=swap_pks).update(day=D, period=P)
+        Lesson.objects.filter(pk__in=lesson_pks).update(day=new_day, period=new_period)
+        if sibling_pks:
+            Lesson.objects.filter(pk__in=sibling_pks).update(day=new_day, period=new_period)
         if swap_pks:
-            Lesson.objects.filter(pk__in=swap_pks).update(day=old_day, period=old_period)  # step 3: swap → джерело
+            Lesson.objects.filter(pk__in=swap_pks).update(day=old_day, period=old_period)
 
     return JsonResponse({'ok': True})
 
@@ -731,6 +748,82 @@ def lesson_set_room(request, pk):
 
     lesson.save(update_fields=['room'])
     return JsonResponse({'ok': True})
+
+
+@require_POST
+def lesson_toggle_week(request, pk):
+    """POST: змінити тиждень уроку (А↔Б). Лише для alt-уроків (week=0 або week=1)."""
+    from django.http import JsonResponse
+    import json
+    schedule = get_object_or_404(Schedule, pk=pk)
+    try:
+        data = json.loads(request.body)
+        lesson_id = data['lesson_id']
+    except (json.JSONDecodeError, KeyError):
+        return JsonResponse({'ok': False, 'error': 'Некоректний запит'}, status=400)
+
+    lesson = get_object_or_404(Lesson, pk=lesson_id, schedule=schedule)
+    new_week = 1 - lesson.week  # 0→1 або 1→0
+
+    # Уся сім'я (той самий слот + вчитель + предмет + клас + група + тиждень)
+    family_pks = list(Lesson.objects.filter(
+        schedule=schedule,
+        school_class=lesson.school_class,
+        teacher=lesson.teacher,
+        subject=lesson.subject,
+        group=lesson.group,
+        day=lesson.day, period=lesson.period,
+        week=lesson.week,
+    ).values_list('pk', flat=True))
+
+    # Конфлікт класу в новому тижні
+    if Lesson.objects.filter(
+        schedule=schedule, school_class=lesson.school_class,
+        day=lesson.day, period=lesson.period, week=new_week,
+    ).exclude(pk__in=family_pks).exists():
+        return JsonResponse({'ok': False, 'error': 'Клас вже має урок в цей час у цьому тижні'})
+
+    # Конфлікт вчителя в новому тижні
+    if Lesson.objects.filter(
+        schedule=schedule, teacher=lesson.teacher,
+        day=lesson.day, period=lesson.period, week=new_week,
+    ).exclude(pk__in=family_pks).exists():
+        return JsonResponse({'ok': False, 'error': f'Вчитель {lesson.teacher} вже зайнятий в цей час у цьому тижні'})
+
+    Lesson.objects.filter(pk__in=family_pks).update(week=new_week)
+    return JsonResponse({'ok': True})
+
+
+def lesson_sibling(request, pk):
+    """GET: знайти сиблінг-групу уроку, що знаходиться на ІНШОМУ слоті (ще не спарована)."""
+    from django.http import JsonResponse
+    schedule = get_object_or_404(Schedule, pk=pk)
+    lesson_id = request.GET.get('lesson_id')
+    lesson = get_object_or_404(Lesson, pk=lesson_id, schedule=schedule)
+
+    if lesson.group is None:
+        return JsonResponse({'found': False})
+
+    sibling = (Lesson.objects
+               .filter(schedule=schedule,
+                       school_class=lesson.school_class,
+                       subject=lesson.subject)
+               .exclude(group=lesson.group)
+               .exclude(group=None)
+               .exclude(day=lesson.day, period=lesson.period)
+               .first())
+
+    if not sibling:
+        return JsonResponse({'found': False})
+
+    return JsonResponse({
+        'found': True,
+        'sibling_id': sibling.pk,
+        'sibling_group': sibling.group,
+        'sibling_day': sibling.day,
+        'sibling_period': sibling.period,
+        'sibling_day_name': DAYS_FULL[sibling.day] if sibling.day < len(DAYS_FULL) else f'День {sibling.day + 1}',
+    })
 
 
 @require_POST
@@ -834,7 +927,8 @@ def teacher_schedule(request, schedule_pk, teacher_pk):
             week_b = [l for l in cell if l.week == 1]
             subj_a = {l.subject_id for l in week_a}
             subj_b = {l.subject_id for l in week_b}
-            if week_a and week_b and subj_a == subj_b:
+            if week_a and week_b and subj_a == subj_b \
+                    and week_a[0].school_class_id == week_b[0].school_class_id:
                 grid[d][p] = {'kind': 'regular', 'lesson': week_a[0]}
             elif week_a and week_b:
                 grid[d][p] = {'kind': 'alt', 'week_a': week_a[0], 'week_b': week_b[0]}
@@ -891,7 +985,6 @@ def _build_display_grid(lessons, classes, D, P):
                 subj_a = {l.subject_id for l in week_a}
                 subj_b = {l.subject_id for l in week_b}
                 if week_a and week_b and subj_a == subj_b:
-                    # Однаковий предмет обидва тижні → звичайний (базовий) урок
                     primary = week_a[0]
                     extra = week_a[1] if len(week_a) > 1 else None
                     grid[sc.pk][d][p] = {'kind': 'regular', 'primary': primary, 'extra': extra}

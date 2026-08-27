@@ -1260,6 +1260,33 @@ def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
             for a_x, a_y in alt_pairs
         ))
 
+    # Cross-class alt pairs: якщо вчитель має той самий 0.5h предмет у паралельних
+    # класах (однаковий grade), перший клас за алфавітом → тиждень А, другий → тиждень Б,
+    # і обидва на ОДИН і той самий слот (xa[A,d,p] == xb2[B,d,p]).
+    # Це дає вчителю один слот для обох паралелей замість двох різних слотів.
+    _alt_paired_set = {a_i for pair in alt_pairs for a_i in pair}
+    _ccw_groups: dict = defaultdict(list)
+    for a_i, a in enumerate(assignments):
+        if (base_count[a_i] == 0 and alt_count[a_i] == 1
+                and a.group is None and a_i not in _alt_paired_set):
+            _ccw_groups[(a.teacher_id, a.subject_id, a.school_class.grade)].append(a_i)
+
+    cross_class_alt_pairs: list = []  # (a_week_A, a_week_B) — same slot, opposite weeks
+    for ais in _ccw_groups.values():
+        if len(ais) < 2:
+            continue
+        ais_sorted = sorted(ais, key=lambda i: assignments[i].school_class.letter)
+        for i in range(0, len(ais_sorted) - 1, 2):
+            cross_class_alt_pairs.append((ais_sorted[i], ais_sorted[i + 1]))
+
+    if cross_class_alt_pairs:
+        _log('cross_class_alt_pairs=' + ', '.join(
+            f"{assignments[a_x].school_class}(А)"
+            f"+{assignments[a_y].school_class}(Б)/"
+            f"{assignments[a_x].subject.short_name or assignments[a_x].subject.name}"
+            for a_x, a_y in cross_class_alt_pairs
+        ))
+
     # 6. Group co-scheduling (same slot for all groups, both xb and xa/xb2)
     for (cls_pk, subj_pk), gmap in group_map.items():
         if (cls_pk, subj_pk) in matched_cross_keys:
@@ -1713,9 +1740,10 @@ def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
                 model.add(day_occ_B[d1] - day_occ_B[d2] <= 1)
                 model.add(day_occ_B[d2] - day_occ_B[d1] <= 1)
 
-    # 14. Alt pairing: paired 0.5h subjects share the same slot with opposite weeks.
-    #     xa[a_x, d, p] == xb2[a_y, d, p] → a_x in week A, a_y in week B at same slot.
-    for (a_x, a_y) in alt_pairs:
+    # 14. Alt pairing: xa[a_x,d,p] == xb2[a_y,d,p] → same slot, opposite weeks.
+    #     Covers both same-class pairs (different subjects) and cross-class pairs
+    #     (same subject, parallel classes of the same teacher).
+    for (a_x, a_y) in alt_pairs + cross_class_alt_pairs:
         for d in range(D):
             for p in range(P):
                 model.add(xa[a_x, d, p] == xb2[a_y, d, p])

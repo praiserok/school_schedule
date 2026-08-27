@@ -56,6 +56,8 @@ urlpatterns = [
     path('schedules/<int:schedule_pk>/teacher/<int:teacher_pk>/', views.teacher_schedule, name='teacher_schedule'),
     path('schedules/<int:pk>/move-lesson/', views.lesson_move, name='lesson_move'),
     path('schedules/<int:pk>/set-room/', views.lesson_set_room, name='lesson_set_room'),
+    path('schedules/<int:pk>/lesson-sibling/', views.lesson_sibling, name='lesson_sibling'),
+    path('schedules/<int:pk>/toggle-week/', views.lesson_toggle_week, name='lesson_toggle_week'),
 
     # Exports
     path('export/teacher-load/', views.export_teacher_load, name='export_teacher_load'),
