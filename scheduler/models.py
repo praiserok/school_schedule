@@ -13,6 +13,13 @@ class Teacher(models.Model):
     max_lessons_per_day = models.PositiveSmallIntegerField(
         default=8, verbose_name='Макс. уроків на день'
     )
+    # Заблоковані слоти: {"0": [0,1], "2": [5,6]} = пн уроки 1-2, ср уроки 6-7 недоступні.
+    # null = без обмежень по слотах (тільки available_days застосовується).
+    unavailable_slots = models.JSONField(
+        default=None, null=True, blank=True,
+        verbose_name='Недоступні слоти',
+        help_text='Заблоковані уроки по днях (заповнюється через форму)',
+    )
 
     class Meta:
         ordering = ['last_name', 'first_name']
@@ -25,6 +32,13 @@ class Teacher(models.Model):
     def days_display(self):
         days = self.available_days.ljust(5, '0')
         return [(label, days[i] == '1') for i, label in enumerate(self._DAY_LABELS)]
+
+    def is_slot_available(self, day: int, period: int) -> bool:
+        """Return False if this (day, period) slot is blocked for this teacher."""
+        if not self.unavailable_slots:
+            return True
+        blocked = self.unavailable_slots.get(str(day), [])
+        return period not in blocked
 
     def __str__(self):
         return f'{self.last_name} {self.first_name}'

@@ -35,6 +35,21 @@ def _avail_mask(teacher, D: int) -> str:
     return teacher.available_days[:D].ljust(D, '0')
 
 
+def _blocked_slots(teacher, D: int, P: int) -> set:
+    """Return set of (day, period) pairs blocked for this teacher."""
+    if not teacher.unavailable_slots:
+        return set()
+    result = set()
+    for day_str, periods in teacher.unavailable_slots.items():
+        d = int(day_str)
+        if d >= D:
+            continue
+        for p in periods:
+            if p < P:
+                result.add((d, p))
+    return result
+
+
 def _summary(schedule, assignments, base_count, alt_count, canonical,
              class_total_A, teachers, teacher_assignments, classes, D, P) -> str:
     cls_by_pk = {c.pk: c for c in classes}
@@ -205,29 +220,31 @@ def _diagnose(schedule, assignments, base_count, alt_count, canonical,
     return issues
 
 
-def _solve_gap_phase(assignments, canonical, class_assignments, teacher_assignments,
-                     base_count, alt_count, classes, teachers, D, P, phase2_vals):
+def _solve_gap_phase(assignments, class_assignments, teacher_assignments,
+                     base_count, alt_count, classes, teachers, D, P, phase2_vals,
+                     alt_pairs=None, specialized_capacity=None):
     """Phase 3: fix group lessons, re-optimize non-group lessons to minimize teacher windows.
 
-    phase2_vals: {a_i: {'base': [(d,p),...], 'xa': [(d,p),...], 'xb2': [(d,p),...]}}
-    Returns same-format dict for non-group assignments only, or None if failed/no improvement possible.
+    phase2_vals:           {a_i: {'base': [(d,p),...], 'xa': [(d,p),...], 'xb2': [(d,p),...]}}
+    alt_pairs:             list of (a_x, a_y) — 0.5h subjects that share a slot opposite weeks.
+    specialized_capacity:  {subj_id: cap} — max simultaneous PE-like lessons per slot.
+    Returns same-format dict for non-group assignments only, or None if failed/no improvement.
     """
     ng_set = frozenset(a_i for a_i, a in enumerate(assignments) if a.group is None)
     if not ng_set:
         return None
-    # No gap optimization possible if no non-group lesson has alternating weeks
-    if not any(alt_count[a_i] for a_i in ng_set):
-        return None
 
-    # Precompute fixed group occupancy from Phase 2
+    # Precompute fixed occupancy from Phase 2.
+    # Fixed = group lessons + shared-room lessons (PE/gym).
+    # Shared-room lessons are pinned to preserve the gym pairing that Phase 2
+    # carefully built; re-optimizing them here breaks room assignments.
     fixed_t_A:   dict = defaultdict(bool)   # (t_pk, d, p) -> bool  week A
     fixed_t_B:   dict = defaultdict(bool)   # (t_pk, d, p) -> bool  week B
     fixed_cls_A: dict = defaultdict(bool)   # (cls_pk, d, p) -> bool
     fixed_cls_B: dict = defaultdict(bool)
 
-    for a_i, a in enumerate(assignments):
-        if a.group is None:
-            continue
+    def _pin(a_i, a):
+        """Pin an assignment as fixed (not re-optimized by Phase 3)."""
         for d, p in phase2_vals[a_i]['base']:
             fixed_t_A[a.teacher_id, d, p]        = True
             fixed_t_B[a.teacher_id, d, p]        = True
@@ -239,6 +256,26 @@ def _solve_gap_phase(assignments, canonical, class_assignments, teacher_assignme
         for d, p in phase2_vals[a_i]['xb2']:
             fixed_t_B[a.teacher_id, d, p]        = True
             fixed_cls_B[a.school_class_id, d, p] = True
+
+    # Pin group lessons
+    for a_i, a in enumerate(assignments):
+        if a.group is None:
+            continue
+        _pin(a_i, a)
+
+    # Pin shared-room (PE/gym) non-group lessons and remove them from ng_set.
+    # This preserves the gym pairing from Phase 2 exactly.
+    shared_room_ais = frozenset(
+        a_i for a_i in ng_set
+        if assignments[a_i].subject.allow_shared_room
+    )
+    for a_i in shared_room_ais:
+        _pin(a_i, assignments[a_i])
+    ng_set = ng_set - shared_room_ais
+
+    # No gap optimization possible if no movable lesson has alternating weeks
+    if not any(alt_count[a_i] for a_i in ng_set):
+        return None
 
     model = cp_model.CpModel()
     xb3:  dict = {}
@@ -293,6 +330,15 @@ def _solve_gap_phase(assignments, canonical, class_assignments, teacher_assignme
                 for p in range(P):
                     model.add(xa3[a_i, d, p] + xb23[a_i, d, p] <= 1)
 
+    # 1b. Alt pairing: paired 0.5h subjects share the same slot with opposite weeks.
+    for (a_x, a_y) in (alt_pairs or []):
+        if a_x not in ng_set or a_y not in ng_set:
+            continue
+        for d in range(D):
+            for p in range(P):
+                if not isinstance(xa3[a_x, d, p], int) and not isinstance(xb23[a_y, d, p], int):
+                    model.add(xa3[a_x, d, p] == xb23[a_y, d, p])
+
     # 2. Class conflict (non-group vs non-group + fixed group)
     for c in classes:
         ng_c = [a_i for a_i in class_assignments[c.pk] if a_i in ng_set]
@@ -317,12 +363,13 @@ def _solve_gap_phase(assignments, canonical, class_assignments, teacher_assignme
                 model.add(cp_model.LinearExpr.Sum([v for a_i in ng_t for v in vA(a_i, d, p)]) + fix_A <= 1)
                 model.add(cp_model.LinearExpr.Sum([v for a_i in ng_t for v in vB(a_i, d, p)]) + fix_B <= 1)
 
-    # 4. Teacher availability
+    # 4. Teacher availability (day + per-slot restrictions)
     for a_i in ng_set:
-        mask = _avail_mask(assignments[a_i].teacher, D)
+        mask    = _avail_mask(assignments[a_i].teacher, D)
+        blocked = _blocked_slots(assignments[a_i].teacher, D, P)
         for d in range(D):
-            if mask[d] != '1':
-                for p in range(P):
+            for p in range(P):
+                if mask[d] != '1' or (d, p) in blocked:
                     model.add(xb3[a_i, d, p] == 0)
                     if alt_count[a_i]:
                         model.add(xa3[a_i, d, p]  == 0)
@@ -756,12 +803,13 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
                     m.add(cp_model.LinearExpr.Sum(
                         [v for a_i in t_grp for v in vB(a_i, d, p)]) <= 1)
 
-        # Teacher availability
+        # Teacher availability (day + per-slot restrictions)
         for a_i in grp_set:
-            mask = _avail_mask(assignments[a_i].teacher, D)
+            mask    = _avail_mask(assignments[a_i].teacher, D)
+            blocked = _blocked_slots(assignments[a_i].teacher, D, P)
             for d in range(D):
-                if mask[d] != '1':
-                    for p in range(P):
+                for p in range(P):
+                    if mask[d] != '1' or (d, p) in blocked:
                         m.add(xb_[a_i, d, p] == 0)
                         if alt_count[a_i]:
                             m.add(xa_[a_i, d, p] == 0)
@@ -1016,7 +1064,7 @@ def _solve_group_phase(assignments, group_map, class_assignments, teacher_assign
     return fixed
 
 
-def generate(schedule_id: int) -> tuple:
+def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
     import time
     _t0 = time.time()
     def _log(msg): print(f'[GEN +{time.time()-_t0:.1f}s] {msg}', flush=True)
@@ -1160,12 +1208,13 @@ def generate(schedule_id: int) -> tuple:
                 model.add(cp_model.LinearExpr.Sum(tvA) <= 1)
                 model.add(cp_model.LinearExpr.Sum(tvB) <= 1)
 
-    # 4. Teacher availability
+    # 4. Teacher availability (day + per-slot restrictions)
     for a_i, a in enumerate(assignments):
-        mask = _avail_mask(a.teacher, D)
+        mask    = _avail_mask(a.teacher, D)
+        blocked = _blocked_slots(a.teacher, D, P)
         for d in range(D):
-            if mask[d] != '1':
-                for p in range(P):
+            for p in range(P):
+                if mask[d] != '1' or (d, p) in blocked:
                     model.add(xb[a_i, d, p] == 0)
                     if alt_count[a_i]:
                         model.add(xa[a_i, d, p] == 0)
@@ -1191,6 +1240,25 @@ def generate(schedule_id: int) -> tuple:
         f"({'eq' if mode == 'equal' else 'part'})"
         for s_g1_ais, s_g2_ais, c_g1, c_g2, mode, c_is_cross in cs_pairs
     ))
+
+    # Pair alt-only (0.5h) non-group subjects within the same class.
+    # Each pair shares the same slot: one in week A, the other in week B.
+    alt_by_class: dict = defaultdict(list)
+    for a_i, a in enumerate(assignments):
+        if base_count[a_i] == 0 and alt_count[a_i] == 1 and a.group is None:
+            alt_by_class[a.school_class_id].append(a_i)
+    alt_pairs: list = []
+    for cls_pk, ais in alt_by_class.items():
+        ais_sorted = sorted(ais, key=lambda i: assignments[i].subject.name)
+        for i in range(0, len(ais_sorted) - 1, 2):
+            alt_pairs.append((ais_sorted[i], ais_sorted[i + 1]))
+    if alt_pairs:
+        _log(f'alt_pairs={len(alt_pairs)}: ' + ', '.join(
+            f"{assignments[a_x].school_class}/"
+            f"{assignments[a_x].subject.short_name or assignments[a_x].subject.name}"
+            f"+{assignments[a_y].subject.short_name or assignments[a_y].subject.name}"
+            for a_x, a_y in alt_pairs
+        ))
 
     # 6. Group co-scheduling (same slot for all groups, both xb and xa/xb2)
     for (cls_pk, subj_pk), gmap in group_map.items():
@@ -1534,6 +1602,20 @@ def generate(schedule_id: int) -> tuple:
             model.add(cp_model.LinearExpr.Sum(day_A) <= 1)
             model.add(cp_model.LinearExpr.Sum(day_B) <= 1)
 
+    # 9b. Can-be-double subjects: at most 2 lessons per day.
+    #     (Constraint 9 skips these, so without this cap 3+ lessons can land on one day.)
+    for a_i, a in enumerate(assignments):
+        if not a.subject.can_be_double:
+            continue
+        total_lessons = base_count[a_i] + alt_count[a_i]
+        if total_lessons <= 2:
+            continue
+        for d in range(D):
+            day_A = [v for p in range(P) for v in vars_A(a_i, d, p)]
+            day_B = [v for p in range(P) for v in vars_B(a_i, d, p)]
+            model.add(cp_model.LinearExpr.Sum(day_A) <= 2)
+            model.add(cp_model.LinearExpr.Sum(day_B) <= 2)
+
     # 10. Specialized room capacity
     subj_assignments: dict = defaultdict(list)
     for a_i, a in enumerate(assignments):
@@ -1591,9 +1673,9 @@ def generate(schedule_id: int) -> tuple:
                             model.add(has_A[g1, d, p] + has_A[g2, d, p] <= 1)
                             model.add(has_B[g1, d, p] + has_B[g2, d, p] <= 1)
 
-    # 12. Soft: reward same-grade co-scheduling for shared-room subjects (e.g. PE).
-    # When two classes of the same grade land on the same slot they naturally pair
-    # in the shared room.  Adjacent-grade pairing is only a fallback.
+    # 12. Soft: reward same-grade co-scheduling for shared-room subjects (PE/gym).
+    # Weight 800 (below PAIR_WEIGHT=1000) makes full pairing strongly preferred
+    # without risking infeasibility from hard constraints.
     obj_same_grade_room: list = []
     for subj_pk, s_ais in subj_assignments.items():
         if not assignments[s_ais[0]].subject.allow_shared_room:
@@ -1610,6 +1692,33 @@ def generate(schedule_id: int) -> tuple:
                         both = model.new_bool_var(f'sgr_{ai}_{aj}_{d}_{p}')
                         model.add_min_equality(both, [xb[ai, d, p], xb[aj, d, p]])
                         obj_same_grade_room.append(both)
+
+    # 13. Class daily balance: any two days differ by at most 1 occupied period.
+    #     Uses cls_slot_A/B (built in constraint 8) which count true class occupancy —
+    #     same-teacher group pairs share one slot, cross-teacher pairs use two.
+    #     This prevents 4-lesson days next to 6-lesson days for the same class.
+    for c in classes:
+        slot_A = cls_slot_A.get(c.pk)
+        slot_B = cls_slot_B.get(c.pk)
+        if not slot_A:
+            continue
+        day_occ_A = [cp_model.LinearExpr.Sum([slot_A[d, p] for p in range(P)])
+                     for d in range(D)]
+        day_occ_B = [cp_model.LinearExpr.Sum([slot_B[d, p] for p in range(P)])
+                     for d in range(D)]
+        for d1 in range(D):
+            for d2 in range(d1 + 1, D):
+                model.add(day_occ_A[d1] - day_occ_A[d2] <= 1)
+                model.add(day_occ_A[d2] - day_occ_A[d1] <= 1)
+                model.add(day_occ_B[d1] - day_occ_B[d2] <= 1)
+                model.add(day_occ_B[d2] - day_occ_B[d1] <= 1)
+
+    # 14. Alt pairing: paired 0.5h subjects share the same slot with opposite weeks.
+    #     xa[a_x, d, p] == xb2[a_y, d, p] → a_x in week A, a_y in week B at same slot.
+    for (a_x, a_y) in alt_pairs:
+        for d in range(D):
+            for p in range(P):
+                model.add(xa[a_x, d, p] == xb2[a_y, d, p])
 
     # -------------------------------------------------------------------------
     # Phase 1: schedule group lessons with cross-teacher pairing, then hint Phase 2.
@@ -1722,7 +1831,9 @@ def generate(schedule_id: int) -> tuple:
     #    + obj_same_day: split groups from same teacher on same day
     #    + obj_anchor:   follower-slot aligned with anchor teacher
     #
-    # 2. ROOM_PAIR_WEIGHT (300): same-grade PE/shared-room co-scheduling.
+    # 2. ROOM_PAIR_WEIGHT (500): same-grade PE/shared-room co-scheduling.
+    #    Kept below PAIR_WEIGHT so group-lesson pairing takes priority.
+    #    Phase 3 only enforces room capacity (constraint 7b); pairing is soft.
     #
     # 3. CLUSTER_WEIGHT (100): anti-clustering for unpaired lessons.
     #    When a class has unpaired lessons from multiple subjects (e.g. 4А:
@@ -1737,7 +1848,7 @@ def generate(schedule_id: int) -> tuple:
     #    Must be large enough that the 2-point gap between adjacent periods
     #    outweighs any residual slack in FEASIBLE (non-OPTIMAL) solutions.
     PAIR_WEIGHT      = 1000
-    ROOM_PAIR_WEIGHT = 300   # same-grade room pairing: above cluster/edge
+    ROOM_PAIR_WEIGHT = 500   # same-grade PE pairing; above 400 but won't block Phase 2
     CLUSTER_WEIGHT   = 100
     EDGE_WEIGHT      = 100
 
@@ -1841,7 +1952,7 @@ def generate(schedule_id: int) -> tuple:
 
     # -------------------------------------------------------------------------
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 60.0
+    solver.parameters.max_time_in_seconds = 90.0
     solver.parameters.num_search_workers = 8
     solver.parameters.log_search_progress = False
 
@@ -1912,16 +2023,21 @@ def generate(schedule_id: int) -> tuple:
                         xb2_s.append((d2, p2))
         final_vals[a_i2] = {'base': base_s, 'xa': xa_s, 'xb2': xb2_s}
 
-    _log('phase3 start')
-    phase3_result = _solve_gap_phase(
-        assignments, canonical, class_assignments, teacher_assignments,
-        base_count, alt_count, classes, teachers, D, P, final_vals,
-    )
-    if phase3_result:
-        final_vals.update(phase3_result)
-        _log(f'phase3 done: non-group lessons re-optimized for {len(phase3_result)} assignments')
+    if optimize_teachers:
+        _log('phase3 start (teacher-window optimization)')
+        phase3_result = _solve_gap_phase(
+            assignments, class_assignments, teacher_assignments,
+            base_count, alt_count, classes, teachers, D, P, final_vals,
+            alt_pairs=alt_pairs,
+            specialized_capacity=specialized_capacity,
+        )
+        if phase3_result:
+            final_vals.update(phase3_result)
+            _log(f'phase3 done: non-group lessons re-optimized for {len(phase3_result)} assignments')
+        else:
+            _log('phase3 skipped or failed, using phase2 solution')
     else:
-        _log('phase3 skipped or failed, using phase2 solution')
+        _log('phase3 skipped (optimize_teachers=False)')
 
     # -------------------------------------------------------------------------
     # Room assignment

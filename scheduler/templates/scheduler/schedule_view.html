@@ -28,13 +28,35 @@
     </ul>
   </div>
 
-  <form method="post" action="{% url 'scheduler:schedule_generate' schedule.pk %}">
-    {% csrf_token %}
-    <button type="submit" class="btn btn-primary btn-sm"
-            onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-1\'></span>Генерую…'; this.form.submit();">
-      <i class="bi bi-lightning-charge me-1"></i>Згенерувати розклад
+  <div class="dropdown">
+    <button class="btn btn-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+      <i class="bi bi-lightning-charge me-1"></i>Згенерувати
     </button>
-  </form>
+    <ul class="dropdown-menu dropdown-menu-end">
+      <li>
+        <form method="post" action="{% url 'scheduler:schedule_generate' schedule.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="optimize_teachers" value="0">
+          <button type="submit" class="dropdown-item"
+                  onclick="this.disabled=true; this.closest('form').submit();">
+            <i class="bi bi-lightning-charge me-2 text-primary"></i>Швидка генерація
+            <div class="text-muted small ps-4">без оптимізації вікон вчителів</div>
+          </button>
+        </form>
+      </li>
+      <li>
+        <form method="post" action="{% url 'scheduler:schedule_generate' schedule.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="optimize_teachers" value="1">
+          <button type="submit" class="dropdown-item"
+                  onclick="this.disabled=true; this.closest('form').submit();">
+            <i class="bi bi-stars me-2 text-warning"></i>З оптимізацією вчителів
+            <div class="text-muted small ps-4">мінімізує вікна у розкладі вчителів</div>
+          </button>
+        </form>
+      </li>
+    </ul>
+  </div>
 </div>
 
 {# Швидка навігація по класах #}
@@ -107,6 +129,8 @@
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_a.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.week_a.teacher }}</a>
               </div>
+              {% if cell.week_a.room %}<div class="text-muted" style="font-size:.7rem;">каб. {{ cell.week_a.room }}</div>
+              {% else %}<div style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
             </div>
             {% endif %}
             {% if cell.week_b %}
@@ -117,6 +141,8 @@
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_b.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.week_b.teacher }}</a>
               </div>
+              {% if cell.week_b.room %}<div class="text-muted" style="font-size:.7rem;">каб. {{ cell.week_b.room }}</div>
+              {% else %}<div style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
             </div>
             {% endif %}
           </td>
@@ -143,6 +169,10 @@
                 </div>
                 {% if lesson.room %}
                   <div class="text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</div>
+                {% else %}
+                  <div style="font-size:.7rem;color:#dc3545;font-weight:600;">
+                    <i class="bi bi-exclamation-triangle-fill"></i> без кабінету
+                  </div>
                 {% endif %}
               </div>
               {% if cell.extra %}
@@ -155,7 +185,7 @@
                 {% endif %}
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.extra.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.extra.teacher }}</a>
-                {% if cell.extra.room %}<span class="text-muted"> каб. {{ cell.extra.room }}</span>{% endif %}
+                {% if cell.extra.room %}<div class="text-muted" style="font-size:.7rem;">каб. {{ cell.extra.room }}</div>{% else %}<div style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
               </div>
               {% endif %}
             {% endif %}

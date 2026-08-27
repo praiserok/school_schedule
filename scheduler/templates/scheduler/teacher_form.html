@@ -1,0 +1,177 @@
+{% extends "scheduler/base.html" %}
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-3 gap-2">
+  <a href="{% url back_url %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h4 class="mb-0">{{ title }}</h4>
+</div>
+
+<div class="table-card p-4" style="max-width:680px;">
+  <form method="post" novalidate id="teacher-form">
+    {% csrf_token %}
+
+    {# ── Прізвище та Ім'я ── #}
+    {% for field in form %}
+      {% if field.name == 'unavailable_slots' %}
+        {{ field }}
+      {% elif field.name == 'available_days' %}
+        {# handled below #}
+      {% else %}
+        <div class="mb-3">
+          {% if field.field.widget.input_type == 'checkbox' %}
+            <div class="form-check">
+              {{ field }}
+              <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            </div>
+          {% else %}
+            <label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+          {% endif %}
+          {% if field.errors %}<div class="invalid-feedback d-block">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+      {% endif %}
+    {% endfor %}
+
+    {# ── Доступні дні ── #}
+    <div class="mb-3">
+      <label class="form-label fw-semibold">Доступні дні</label>
+      <div class="d-flex gap-3 flex-wrap" id="avail-days-row">
+        {% for choice in form.available_days %}
+          <div class="form-check form-check-inline">
+            {{ choice.tag }}
+            <label class="form-check-label" for="{{ choice.id_for_label }}">{{ choice.choice_label }}</label>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# ── Недоступні слоти ── #}
+    <div class="mb-4">
+      <label class="form-label fw-semibold">
+        Недоступні уроки по днях
+        <span class="text-muted fw-normal small ms-1">— позначте клітинки коли вчитель не може мати урок</span>
+      </label>
+
+      {# Читаємо поточні заблоковані слоти з instance #}
+      <div class="table-responsive">
+        <table class="table table-bordered table-sm mb-0 text-center align-middle" id="slots-table" style="max-width:520px;">
+          <thead class="table-light">
+            <tr>
+              <th style="width:48px;">#</th>
+              {% for label in days_labels %}
+                <th class="day-col" data-day="{{ forloop.counter0 }}">{{ label }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in periods_range %}
+            <tr>
+              <td class="text-muted fw-semibold">{{ p|add:1 }}</td>
+              {% for d in days_range %}
+                <td class="slot-cell" data-day="{{ d }}" data-period="{{ p }}"
+                    style="cursor:pointer;user-select:none;">
+                  <input type="checkbox" class="slot-cb d-none"
+                         name="slots_d{{ d }}_p{{ p }}"
+                         value="1"
+                         id="slot_{{ d }}_{{ p }}">
+                  <span class="slot-icon"></span>
+                </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="form-text mt-1">
+        <span class="me-3"><span style="display:inline-block;width:14px;height:14px;background:#dc3545;border-radius:3px;vertical-align:middle;"></span> — урок заблоковано</span>
+        <span><span style="display:inline-block;width:14px;height:14px;background:#e9ecef;border-radius:3px;border:1px solid #dee2e6;vertical-align:middle;"></span> — доступно</span>
+      </div>
+    </div>
+
+    <div class="d-flex gap-2 mt-2">
+      <button type="submit" class="btn btn-primary">
+        <i class="bi bi-check-lg me-1"></i>Зберегти
+      </button>
+      <a href="{% url back_url %}" class="btn btn-outline-secondary">Скасувати</a>
+    </div>
+  </form>
+</div>
+
+{{ form.instance.unavailable_slots|json_script:"existing-blocked-data" }}
+<script>
+(function () {
+  const existingBlocked = JSON.parse(document.getElementById('existing-blocked-data').textContent);
+
+  // Pre-check checkboxes based on existing data
+  if (existingBlocked) {
+    Object.entries(existingBlocked).forEach(([day, periods]) => {
+      periods.forEach(p => {
+        const cb = document.getElementById(`slot_${day}_${p}`);
+        if (cb) cb.checked = true;
+      });
+    });
+  }
+
+  // Render cell states
+  function renderCell(cell) {
+    const cb = cell.querySelector('.slot-cb');
+    const icon = cell.querySelector('.slot-icon');
+    const dayDisabled = cell.closest('td')?.classList.contains('day-disabled');
+    if (dayDisabled || !cb) return;
+    if (cb.checked) {
+      cell.style.background = '#dc354522';
+      icon.innerHTML = '<i class="bi bi-x-circle-fill text-danger" style="font-size:.85rem;"></i>';
+    } else {
+      cell.style.background = '';
+      icon.innerHTML = '';
+    }
+  }
+
+  // Click handler on cell
+  document.querySelectorAll('.slot-cell').forEach(cell => {
+    renderCell(cell);
+    cell.addEventListener('click', () => {
+      const cb = cell.querySelector('.slot-cb');
+      if (cell.classList.contains('day-disabled') || !cb) return;
+      cb.checked = !cb.checked;
+      renderCell(cell);
+    });
+  });
+
+  // Sync day availability: disable column when day checkbox is unchecked
+  function syncDayColumns() {
+    document.querySelectorAll('#avail-days-row input[type=checkbox]').forEach(dayCb => {
+      const day = dayCb.value;
+      const col = document.querySelector(`th.day-col[data-day="${day}"]`);
+      const cells = document.querySelectorAll(`.slot-cell[data-day="${day}"]`);
+      const available = dayCb.checked;
+      if (col) col.style.color = available ? '' : '#adb5bd';
+      cells.forEach(cell => {
+        if (available) {
+          cell.classList.remove('day-disabled');
+          cell.style.opacity = '1';
+          cell.style.cursor = 'pointer';
+        } else {
+          cell.classList.add('day-disabled');
+          cell.style.opacity = '0.3';
+          cell.style.cursor = 'default';
+          // Uncheck if day becomes unavailable
+          const cb = cell.querySelector('.slot-cb');
+          if (cb) cb.checked = false;
+          renderCell(cell);
+        }
+      });
+    });
+  }
+
+  document.querySelectorAll('#avail-days-row input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', syncDayColumns);
+  });
+  syncDayColumns();
+})();
+</script>
+{% endblock %}

@@ -34,12 +34,15 @@ class AvailableDaysField(forms.MultipleChoiceField):
         return ''.join(bits)
 
 
+MAX_PERIODS = 10  # максимум уроків на день у сітці слотів
+
+
 class TeacherForm(forms.ModelForm):
     available_days = AvailableDaysField(label='Доступні дні')
 
     class Meta:
         model = Teacher
-        fields = ['last_name', 'first_name', 'available_days', 'max_lessons_per_day']
+        fields = ['last_name', 'first_name', 'available_days', 'max_lessons_per_day', 'unavailable_slots']
         labels = {
             'last_name': 'Прізвище',
             'first_name': 'Імʼя',
@@ -49,6 +52,7 @@ class TeacherForm(forms.ModelForm):
             'last_name': forms.TextInput(attrs=_ctrl),
             'first_name': forms.TextInput(attrs=_ctrl),
             'max_lessons_per_day': forms.NumberInput(attrs={**_ctrl, 'min': 1, 'max': 10}),
+            'unavailable_slots': forms.HiddenInput(),
         }
 
     def clean_max_lessons_per_day(self):
@@ -56,6 +60,21 @@ class TeacherForm(forms.ModelForm):
         if v is not None and v < 1:
             raise forms.ValidationError('Має бути не менше 1')
         return v
+
+    def clean(self):
+        cleaned = super().clean()
+        # Build unavailable_slots from checkbox POST data: slots_d{day}_p{period}
+        slots: dict = {}
+        for day in range(5):
+            blocked = []
+            for period in range(MAX_PERIODS):
+                key = f'slots_d{day}_p{period}'
+                if self.data.get(key) == '1':
+                    blocked.append(period)
+            if blocked:
+                slots[str(day)] = blocked
+        cleaned['unavailable_slots'] = slots if slots else None
+        return cleaned
 
 
 class SubjectForm(forms.ModelForm):

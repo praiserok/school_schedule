@@ -10,7 +10,7 @@ from .models import Teacher, Subject, Room, SchoolClass, TeacherSubject, Schedul
 from .forms import (
     TeacherForm, SubjectForm, RoomForm, SchoolClassForm,
     TeacherSubjectForm, TeacherLoadRowForm, ClassLoadRowForm, ScheduleForm,
-    BellScheduleForm, BellPeriodForm, DAYS_LABELS, DAYS_FULL,
+    BellScheduleForm, BellPeriodForm, DAYS_LABELS, DAYS_FULL, MAX_PERIODS,
 )
 
 
@@ -201,12 +201,14 @@ def teacher_list(request):
         groups.append((subj, teachers, subj_hours))
 
     subjects = Subject.objects.order_by('name')
+    active_schedule = Schedule.objects.filter(is_active=True).first()
     return render(request, 'scheduler/teacher_list.html', {
         'groups': groups,
         'subjects': subjects,
         'subject_filter': subject_filter,
         'search': search,
         'total_count': len(teacher_list_data),
+        'active_schedule': active_schedule,
     })
 
 
@@ -217,11 +219,14 @@ def teacher_form(request, pk=None):
         form.save()
         messages.success(request, 'Збережено.')
         return redirect('scheduler:teacher_list')
-    return render(request, 'scheduler/form.html', {
+    return render(request, 'scheduler/teacher_form.html', {
         'form': form,
         'title': 'Редагувати вчителя' if obj else 'Додати вчителя',
         'back_url': 'scheduler:teacher_list',
         'days_labels': DAYS_LABELS,
+        'max_periods': MAX_PERIODS,
+        'periods_range': range(MAX_PERIODS),
+        'days_range': range(5),
     })
 
 
@@ -536,10 +541,12 @@ def _validate_move(schedule, lesson, new_day, new_period, swap=None):
     D = schedule.days_per_week
     week = lesson.week  # переміщення лише в межах одного тижня
 
-    # 1. Доступність вчителя
+    # 1. Доступність вчителя (день + слот)
     mask = lesson.teacher.available_days[:D].ljust(D, '0')
     if new_day >= D or mask[new_day] != '1':
         errors.append(f'Вчитель {lesson.teacher} недоступний у цей день')
+    elif not lesson.teacher.is_slot_available(new_day, new_period):
+        errors.append(f'Вчитель {lesson.teacher} недоступний на цьому уроці')
 
     # 2. Конфлікт вчителя
     if Lesson.objects.filter(
@@ -688,7 +695,8 @@ def lesson_move(request, pk):
 @require_POST
 def schedule_generate(request, pk):
     from .generator import generate
-    ok, msg = generate(pk)
+    optimize_teachers = request.POST.get('optimize_teachers') == '1'
+    ok, msg = generate(pk, optimize_teachers=optimize_teachers)
     if ok:
         messages.success(request, msg)
     else:
