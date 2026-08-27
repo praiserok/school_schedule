@@ -579,25 +579,6 @@ def _validate_move(schedule, lesson, new_day, new_period, swap=None):
         if cnt > lesson.teacher.max_lessons_per_day:
             errors.append(f'Вчитель {lesson.teacher}: ліміт {lesson.teacher.max_lessons_per_day} ур/день буде перевищено')
 
-    # 5. Без вікон — не перевіряємо для обміну в тому ж класі (набір слотів не змінюється)
-    if not same_class_swap:
-        # Новий день: додаємо new_period (set — щоб уникнути дублів, коли в слоті вже є інша група)
-        new_day_periods = sorted(set(
-            list(Lesson.objects.filter(
-                schedule=schedule, school_class=lesson.school_class, week=week, day=new_day
-            ).exclude(pk__in=exclude).values_list('period', flat=True)) + [new_period]
-        ))
-        if new_day_periods[0] != 0 or new_day_periods != list(range(len(new_day_periods))):
-            errors.append(f'Клас {lesson.school_class}: виникне вікно в {new_day + 1}-й день')
-
-        # Старий день: прибираємо lesson (унікальні слоти — групові уроки займають один слот двома записами)
-        if lesson.day != new_day:
-            old_periods = sorted(set(Lesson.objects.filter(
-                schedule=schedule, school_class=lesson.school_class, week=week, day=lesson.day
-            ).exclude(pk__in=exclude).values_list('period', flat=True)))
-            if old_periods and (old_periods[0] != 0 or old_periods != list(range(len(old_periods)))):
-                errors.append(f'Клас {lesson.school_class}: виникне вікно в {lesson.day + 1}-й день після переміщення')
-
     return errors
 
 
@@ -689,6 +670,66 @@ def lesson_move(request, pk):
         if swap_pks:
             Lesson.objects.filter(pk__in=swap_pks).update(day=old_day, period=old_period)  # step 3: swap → джерело
 
+    return JsonResponse({'ok': True})
+
+
+def lesson_set_room(request, pk):
+    from django.http import JsonResponse
+    import json
+    schedule = get_object_or_404(Schedule, pk=pk)
+
+    if request.method == 'GET':
+        lesson_id = request.GET.get('lesson_id')
+        lesson = get_object_or_404(Lesson, pk=lesson_id, schedule=schedule)
+
+        # Зайнятість кабінетів у цьому слоті, крім поточного уроку
+        occupancy: dict = defaultdict(int)
+        for l in (Lesson.objects
+                  .filter(schedule=schedule, day=lesson.day, period=lesson.period, week=lesson.week)
+                  .exclude(pk=lesson.pk)
+                  .exclude(room__isnull=True)):
+            occupancy[l.room_id] += 1
+
+        rooms = Room.objects.select_related('subject').order_by('name')
+        available = []
+        for r in rooms:
+            if occupancy.get(r.pk, 0) < r.max_simultaneous:
+                available.append({
+                    'id': r.pk,
+                    'name': r.name,
+                    'current': r.pk == lesson.room_id,
+                })
+
+        return JsonResponse({
+            'current_room_id': lesson.room_id,
+            'current_room_name': lesson.room.name if lesson.room else None,
+            'rooms': available,
+        })
+
+    # POST — зберегти кабінет
+    try:
+        data = json.loads(request.body)
+        lesson_id = data['lesson_id']
+        room_id = data.get('room_id')  # None = без кабінету
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return JsonResponse({'ok': False, 'error': 'Некоректний запит'}, status=400)
+
+    lesson = get_object_or_404(Lesson, pk=lesson_id, schedule=schedule)
+
+    if room_id is not None:
+        room = get_object_or_404(Room, pk=room_id)
+        used = (Lesson.objects
+                .filter(schedule=schedule, day=lesson.day, period=lesson.period,
+                        week=lesson.week, room=room)
+                .exclude(pk=lesson.pk)
+                .count())
+        if used >= room.max_simultaneous:
+            return JsonResponse({'ok': False, 'error': f'Кабінет {room.name} вже зайнятий у цей урок'})
+        lesson.room = room
+    else:
+        lesson.room = None
+
+    lesson.save(update_fields=['room'])
     return JsonResponse({'ok': True})
 
 
