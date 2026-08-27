@@ -1,6 +1,6 @@
 # Замінити 'school-schedule-app' на своє унікальне ім'я: fly apps create school-schedule-YOUR-NAME
-app = 'school-schedule-app'
-primary_region = 'waw'
+app = 'school-sched'
+primary_region = 'fra'
 
 [build]
 
