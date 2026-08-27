@@ -834,14 +834,14 @@ def teacher_schedule(request, schedule_pk, teacher_pk):
             week_b = [l for l in cell if l.week == 1]
             subj_a = {l.subject_id for l in week_a}
             subj_b = {l.subject_id for l in week_b}
-            if not week_b or subj_a == subj_b:
-                grid[d][p] = {'kind': 'regular', 'lesson': (week_a or week_b)[0]}
+            if week_a and week_b and subj_a == subj_b:
+                grid[d][p] = {'kind': 'regular', 'lesson': week_a[0]}
+            elif week_a and week_b:
+                grid[d][p] = {'kind': 'alt', 'week_a': week_a[0], 'week_b': week_b[0]}
+            elif week_a:
+                grid[d][p] = {'kind': 'week_a', 'lesson': week_a[0]}
             else:
-                grid[d][p] = {
-                    'kind': 'alt',
-                    'week_a': week_a[0] if week_a else None,
-                    'week_b': week_b[0] if week_b else None,
-                }
+                grid[d][p] = {'kind': 'week_b', 'lesson': week_b[0]}
 
     bell_times = {}
     if schedule.bell_schedule_id:

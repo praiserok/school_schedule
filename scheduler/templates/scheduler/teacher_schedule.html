@@ -75,6 +75,11 @@
               {{ lesson.school_class }}
               {% if lesson.group %}<span class="badge text-bg-secondary ms-1" style="font-size:.58rem;">гр.{{ lesson.group }}</span>{% endif %}
             </div>
+            {% if cell.kind == 'week_a' %}
+              <span class="badge text-bg-secondary" style="font-size:.6rem;">тижень А</span>
+            {% elif cell.kind == 'week_b' %}
+              <span class="badge text-bg-dark" style="font-size:.6rem;">тижень Б</span>
+            {% endif %}
             {% if lesson.room %}
               <div class="text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</div>
             {% endif %}
