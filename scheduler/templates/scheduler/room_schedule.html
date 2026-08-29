@@ -9,13 +9,30 @@
   </a>
   <h4 class="mb-0">
     <i class="bi bi-door-open me-1 text-muted"></i>{{ room.name }}
-    {% if room.subject %}
-      <span class="badge bg-warning text-dark ms-1" style="font-size:.75rem;">{{ room.subject }}</span>
-    {% endif %}
+    {% for s in room.subjects.all %}
+      <span class="badge bg-warning text-dark ms-1" style="font-size:.75rem;">{{ s }}</span>
+    {% endfor %}
     {% if room.max_simultaneous > 1 %}
       <span class="badge bg-info text-dark ms-1" style="font-size:.75rem;">до {{ room.max_simultaneous }} класів</span>
     {% endif %}
   </h4>
+
+  <div class="dropdown">
+    <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+      <i class="bi bi-calendar3 me-1"></i>{{ schedule.name }}
+    </button>
+    <ul class="dropdown-menu dropdown-menu-end" style="max-height:320px;overflow-y:auto;">
+      {% for s in all_schedules %}
+      <li>
+        <a class="dropdown-item {% if s.pk == schedule.pk %}active{% endif %}"
+           href="{% url 'scheduler:room_schedule' s.pk room.pk %}">
+          {{ s.name }}
+          {% if s.is_active %}<span class="badge bg-success ms-1" style="font-size:.65rem;">активний</span>{% endif %}
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
 
   <div class="dropdown">
     <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
@@ -26,12 +43,15 @@
       <li>
         <a class="dropdown-item {% if r.pk == room.pk %}active{% endif %}"
            href="{% url 'scheduler:room_schedule' schedule.pk r.pk %}">
-          {{ r.name }}{% if r.subject %} <span class="text-muted small">({{ r.subject }})</span>{% endif %}
+          {{ r.name }}
+          {% with subjs=r.subjects.all %}{% if subjs %}<span class="text-muted small">({% for s in subjs %}{{ s }}{% if not forloop.last %}, {% endif %}{% endfor %})</span>{% endif %}{% endwith %}
         </a>
       </li>
       {% endfor %}
     </ul>
   </div>
+
+  <small class="text-muted ms-1"><i class="bi bi-info-circle me-1"></i>Клікніть на порожній слот, щоб призначити кабінет</small>
 </div>
 
 <div class="table-card" style="overflow-x:auto;">
@@ -55,12 +75,16 @@
         </td>
         {% for d in schedule.days_per_week|make_range %}
         {% with entries=grid|get_item:d|get_item:p %}
-        <td {% if entries %}style="padding:2px;"{% endif %}>
+        {% if entries %}
+        <td style="padding:2px;" data-day="{{ d }}" data-period="{{ p }}">
           {% for entry in entries %}
             {% if not forloop.first %}<hr class="my-1" style="margin:3px 0;">{% endif %}
             {% if entry.kind == 'regular' %}
               {% with l=entry.lesson %}
-              <div style="border-left:3px solid {{ l.subject.color }};background:{{ l.subject.color }}22;padding:3px 5px;border-radius:3px;">
+              <div style="border-left:3px solid {{ l.subject.color }};background:{{ l.subject.color }}22;padding:3px 5px;border-radius:3px;position:relative;">
+                <button class="btn-remove-room" data-lid="{{ l.pk }}" title="Прибрати з кабінету"
+                        style="position:absolute;top:2px;right:3px;border:none;background:none;padding:0;line-height:1;color:#adb5bd;font-size:.75rem;"
+                        onclick="removeFromRoom({{ l.pk }})">×</button>
                 <div class="fw-semibold" style="font-size:.82rem;">{{ l.subject.short_name|default:l.subject.name }}</div>
                 <div class="text-muted" style="font-size:.75rem;">{{ l.school_class }}</div>
                 <div class="text-muted" style="font-size:.72rem;">{{ l.teacher }}</div>
@@ -68,7 +92,10 @@
               {% endwith %}
             {% elif entry.kind == 'alt' %}
               {% if entry.week_a %}
-              <div style="border-left:3px solid {{ entry.week_a.subject.color }};background:{{ entry.week_a.subject.color }}22;padding:3px 5px;margin-bottom:2px;border-radius:3px;">
+              <div style="border-left:3px solid {{ entry.week_a.subject.color }};background:{{ entry.week_a.subject.color }}22;padding:3px 5px;margin-bottom:2px;border-radius:3px;position:relative;">
+                <button class="btn-remove-room" title="Прибрати з кабінету"
+                        style="position:absolute;top:2px;right:3px;border:none;background:none;padding:0;line-height:1;color:#adb5bd;font-size:.75rem;"
+                        onclick="removeFromRoom({{ entry.week_a.pk }})">×</button>
                 <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
                 <span class="fw-semibold" style="font-size:.8rem;">{{ entry.week_a.subject.short_name|default:entry.week_a.subject.name }}</span>
                 <div class="text-muted" style="font-size:.72rem;">{{ entry.week_a.school_class }}</div>
@@ -76,7 +103,10 @@
               </div>
               {% endif %}
               {% if entry.week_b %}
-              <div style="border-left:3px solid {{ entry.week_b.subject.color }};background:{{ entry.week_b.subject.color }}22;padding:3px 5px;border-radius:3px;">
+              <div style="border-left:3px solid {{ entry.week_b.subject.color }};background:{{ entry.week_b.subject.color }}22;padding:3px 5px;border-radius:3px;position:relative;">
+                <button class="btn-remove-room" title="Прибрати з кабінету"
+                        style="position:absolute;top:2px;right:3px;border:none;background:none;padding:0;line-height:1;color:#adb5bd;font-size:.75rem;"
+                        onclick="removeFromRoom({{ entry.week_b.pk }})">×</button>
                 <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
                 <span class="fw-semibold" style="font-size:.8rem;">{{ entry.week_b.subject.short_name|default:entry.week_b.subject.name }}</span>
                 <div class="text-muted" style="font-size:.72rem;">{{ entry.week_b.school_class }}</div>
@@ -85,7 +115,10 @@
               {% endif %}
             {% elif entry.kind == 'week_a' %}
               {% with l=entry.lesson %}
-              <div style="border-left:3px solid {{ l.subject.color }};background:{{ l.subject.color }}22;padding:3px 5px;border-radius:3px;">
+              <div style="border-left:3px solid {{ l.subject.color }};background:{{ l.subject.color }}22;padding:3px 5px;border-radius:3px;position:relative;">
+                <button class="btn-remove-room" title="Прибрати з кабінету"
+                        style="position:absolute;top:2px;right:3px;border:none;background:none;padding:0;line-height:1;color:#adb5bd;font-size:.75rem;"
+                        onclick="removeFromRoom({{ l.pk }})">×</button>
                 <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
                 <span class="fw-semibold" style="font-size:.8rem;">{{ l.subject.short_name|default:l.subject.name }}</span>
                 <div class="text-muted" style="font-size:.72rem;">{{ l.school_class }}</div>
@@ -94,7 +127,10 @@
               {% endwith %}
             {% elif entry.kind == 'week_b' %}
               {% with l=entry.lesson %}
-              <div style="border-left:3px solid {{ l.subject.color }};background:{{ l.subject.color }}22;padding:3px 5px;border-radius:3px;">
+              <div style="border-left:3px solid {{ l.subject.color }};background:{{ l.subject.color }}22;padding:3px 5px;border-radius:3px;position:relative;">
+                <button class="btn-remove-room" title="Прибрати з кабінету"
+                        style="position:absolute;top:2px;right:3px;border:none;background:none;padding:0;line-height:1;color:#adb5bd;font-size:.75rem;"
+                        onclick="removeFromRoom({{ l.pk }})">×</button>
                 <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
                 <span class="fw-semibold" style="font-size:.8rem;">{{ l.subject.short_name|default:l.subject.name }}</span>
                 <div class="text-muted" style="font-size:.72rem;">{{ l.school_class }}</div>
@@ -104,6 +140,14 @@
             {% endif %}
           {% endfor %}
         </td>
+        {% else %}
+        <td class="slot-empty" data-day="{{ d }}" data-period="{{ p }}"
+            style="cursor:pointer;background:#f8f9fa;" title="Клікніть, щоб переглянути та призначити уроки">
+          <div class="text-center text-muted" style="font-size:.65rem;padding:4px 0;">
+            <i class="bi bi-plus-circle"></i>
+          </div>
+        </td>
+        {% endif %}
         {% endwith %}
         {% endfor %}
       </tr>
@@ -112,4 +156,123 @@
     </tbody>
   </table>
 </div>
+
+{# ── Модалка слоту ── #}
+<div class="modal fade" id="slotModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:480px;">
+    <div class="modal-content">
+      <div class="modal-header py-2 px-3">
+        <h6 class="modal-title mb-0" id="slotModalTitle">Слот</h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0" id="slotModalBody">
+        <div class="text-center p-4 text-muted small">Завантаження…</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const CSRF       = document.cookie.split('; ').find(r => r.startsWith('csrftoken='))?.split('=')[1] ?? '';
+  const SLOT_URL   = "{% url 'scheduler:slot_lessons' schedule.pk %}";
+  const ROOM_URL   = "{% url 'scheduler:lesson_set_room' schedule.pk %}";
+  const ROOM_ID    = {{ room.pk }};
+  const slotModal  = new bootstrap.Modal(document.getElementById('slotModal'));
+  const slotBody   = document.getElementById('slotModalBody');
+  const slotTitle  = document.getElementById('slotModalTitle');
+
+  // Клік на порожній слот
+  document.querySelectorAll('.slot-empty').forEach(td => {
+    td.addEventListener('click', function () {
+      const day    = this.dataset.day;
+      const period = parseInt(this.dataset.period) + 1;
+      slotTitle.textContent = `Урок ${period}`;
+      slotBody.innerHTML = '<div class="text-center p-4 text-muted small">Завантаження…</div>';
+      slotModal.show();
+      fetch(`${SLOT_URL}?day=${day}&period=${this.dataset.period}`)
+        .then(r => r.json())
+        .then(data => renderSlot(data, day, this.dataset.period))
+        .catch(() => { slotBody.innerHTML = '<div class="p-3 text-danger small">Помилка</div>'; });
+    });
+  });
+
+  function lessonCard(l, showAssign) {
+    const weekBadge = l.week_label
+      ? `<span class="badge ${l.week_label === 'А' ? 'text-bg-secondary' : 'text-bg-dark'} me-1" style="font-size:.6rem;">${l.week_label}</span>`
+      : '';
+    const groupBadge = l.group
+      ? `<span class="badge text-bg-light border me-1" style="font-size:.6rem;">гр.${l.group}</span>`
+      : '';
+    const assignBtn = showAssign
+      ? `<button class="btn btn-sm btn-outline-success ms-auto py-0" style="font-size:.72rem;"
+                onclick="assignRoom(${l.id})">
+           <i class="bi bi-door-open me-1"></i>Призначити
+         </button>`
+      : '';
+    return `
+      <div class="d-flex align-items-center gap-1 py-1 px-3" style="border-left:3px solid ${l.color};background:${l.color}14;">
+        <div style="min-width:0;flex:1;">
+          ${weekBadge}${groupBadge}
+          <span class="fw-semibold" style="font-size:.82rem;">${l.subject}</span>
+          <span class="text-muted" style="font-size:.75rem;"> · ${l.class}</span>
+          <div class="text-muted" style="font-size:.72rem;">${l.teacher}</div>
+        </div>
+        ${assignBtn}
+      </div>`;
+  }
+
+  function renderSlot(data, day, period) {
+    let html = '';
+    if (data.no_room.length === 0 && data.with_room.length === 0) {
+      slotBody.innerHTML = '<div class="p-4 text-center text-muted small">У цей час уроків немає</div>';
+      return;
+    }
+    if (data.no_room.length > 0) {
+      html += `<div class="px-3 pt-2 pb-1"><span class="badge bg-danger" style="font-size:.7rem;">Без кабінету</span></div>`;
+      data.no_room.forEach(l => { html += lessonCard(l, true); });
+    }
+    if (data.with_room.length > 0) {
+      html += `<div class="px-3 pt-2 pb-1 ${data.no_room.length ? 'mt-1 border-top' : ''}">
+        <span class="badge bg-secondary" style="font-size:.7rem;">Вже у кабінеті</span></div>`;
+      data.with_room.forEach(l => {
+        html += lessonCard(l, true);
+        html += `<div class="px-3 pb-1" style="font-size:.7rem;color:#6c757d;">
+          <i class="bi bi-door-open me-1"></i>${l.room}</div>`;
+      });
+    }
+    slotBody.innerHTML = html;
+  }
+
+  window.assignRoom = function (lessonId) {
+    fetch(ROOM_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+      body: JSON.stringify({lesson_id: lessonId, room_id: ROOM_ID}),
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) { slotModal.hide(); location.reload(); }
+      else alert(data.error || 'Помилка');
+    })
+    .catch(() => alert('Помилка зʼєднання'));
+  };
+
+  window.removeFromRoom = function (lessonId) {
+    fetch(ROOM_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+      body: JSON.stringify({lesson_id: lessonId, room_id: null}),
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) location.reload();
+      else alert(data.error || 'Помилка');
+    })
+    .catch(() => alert('Помилка зʼєднання'));
+  };
+})();
+</script>
 {% endblock %}

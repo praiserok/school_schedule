@@ -52,14 +52,19 @@ urlpatterns = [
     path('schedules/<int:pk>/edit/', views.schedule_form, name='schedule_edit'),
     path('schedules/<int:pk>/delete/', views.schedule_delete, name='schedule_delete'),
     path('schedules/<int:pk>/', views.schedule_view, name='schedule_view'),
+    path('schedules/<int:pk>/copy/', views.schedule_copy, name='schedule_copy'),
+    path('schedules/<int:pk>/reset-rooms/', views.schedule_reset_rooms, name='schedule_reset_rooms'),
+    path('schedules/<int:pk>/assign-rooms/', views.schedule_assign_rooms, name='schedule_assign_rooms'),
     path('schedules/<int:pk>/generate/', views.schedule_generate, name='schedule_generate'),
     path('schedules/<int:schedule_pk>/teacher/<int:teacher_pk>/', views.teacher_schedule, name='teacher_schedule'),
     path('schedules/<int:pk>/move-lesson/', views.lesson_move, name='lesson_move'),
     path('schedules/<int:pk>/set-room/', views.lesson_set_room, name='lesson_set_room'),
     path('schedules/<int:pk>/lesson-sibling/', views.lesson_sibling, name='lesson_sibling'),
     path('schedules/<int:pk>/toggle-week/', views.lesson_toggle_week, name='lesson_toggle_week'),
+    path('schedules/<int:pk>/slot-lessons/', views.slot_lessons, name='slot_lessons'),
 
     # Exports
     path('export/teacher-load/', views.export_teacher_load, name='export_teacher_load'),
     path('export/class-load/', views.export_class_load, name='export_class_load'),
+    path('schedules/<int:pk>/export/', views.export_schedule, name='export_schedule'),
 ]

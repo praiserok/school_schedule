@@ -86,7 +86,7 @@ class SubjectForm(forms.ModelForm):
 
     class Meta:
         model = Subject
-        fields = ['name', 'short_name', 'color', 'can_be_double', 'allow_shared_room', 'max_grade_diff']
+        fields = ['name', 'short_name', 'color', 'can_be_double', 'allow_shared_room', 'max_grade_diff', 'needs_specialized_room']
         labels = {
             'name': 'Назва',
             'short_name': 'Скорочення',
@@ -94,6 +94,7 @@ class SubjectForm(forms.ModelForm):
             'can_be_double': 'Може бути парним уроком',
             'allow_shared_room': 'Дозволити спільний кабінет',
             'max_grade_diff': 'Макс. різниця паралелей',
+            'needs_specialized_room': 'Потребує спеціалізованого кабінету (1-4 кл.)',
         }
         widgets = {
             'name': forms.TextInput(attrs=_ctrl),
@@ -106,45 +107,48 @@ class SubjectForm(forms.ModelForm):
 class RoomForm(forms.ModelForm):
     class Meta:
         model = Room
-        fields = ['name', 'subject', 'capacity', 'max_simultaneous']
+        fields = ['name', 'subjects', 'capacity', 'max_simultaneous']
         labels = {
             'name': 'Назва / номер',
-            'subject': 'Тільки для предмету (необов\'язково)',
+            'subjects': 'Тільки для предметів (необов\'язково)',
             'capacity': 'Місткість',
             'max_simultaneous': 'Макс. класів одночасно',
         }
         widgets = {
             'name': forms.TextInput(attrs=_ctrl),
-            'subject': forms.Select(attrs=_sel),
+            'subjects': forms.CheckboxSelectMultiple(),
             'capacity': forms.NumberInput(attrs={**_ctrl, 'min': 1}),
             'max_simultaneous': forms.NumberInput(attrs={**_ctrl, 'min': 1, 'max': 10}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['subject'].empty_label = '— будь-який предмет —'
-        self.fields['subject'].required = False
+        self.fields['subjects'].required = False
 
 
 class SchoolClassForm(forms.ModelForm):
     class Meta:
         model = SchoolClass
-        fields = ['grade', 'letter', 'home_room']
+        fields = ['grade', 'letter', 'home_room', 'home_teacher']
         labels = {
             'grade': 'Паралель',
             'letter': 'Літера (необов\'язково)',
             'home_room': 'Основний кабінет (для 1-4 класів)',
+            'home_teacher': 'Класний керівник',
         }
         widgets = {
             'grade': forms.NumberInput(attrs={**_ctrl, 'min': 1, 'max': 11}),
             'letter': forms.TextInput(attrs={**_ctrl, 'placeholder': 'А, Б, В… або порожньо'}),
             'home_room': forms.Select(attrs=_sel),
+            'home_teacher': forms.Select(attrs=_sel),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['home_room'].empty_label = '— не вказано —'
         self.fields['home_room'].required = False
+        self.fields['home_teacher'].empty_label = '— не вказано —'
+        self.fields['home_teacher'].required = False
 
 
 class HoursValidationMixin:

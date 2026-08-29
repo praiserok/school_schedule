@@ -25,11 +25,13 @@
       <tr>
         <td><strong>{{ r.name }}</strong></td>
         <td>
-          {% if r.subject %}
-            <span class="badge bg-warning text-dark">{{ r.subject }}</span>
+          {% with subjs=r.subjects.all %}
+          {% if subjs %}
+            {% for s in subjs %}<span class="badge bg-warning text-dark me-1">{{ s }}</span>{% endfor %}
           {% else %}
             <span class="text-muted">Загальний</span>
           {% endif %}
+          {% endwith %}
         </td>
         <td>{{ r.capacity }}</td>
         <td class="text-end">

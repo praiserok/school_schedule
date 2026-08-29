@@ -10,6 +10,24 @@
   <h4 class="mb-0">{{ teacher }}</h4>
   {% if schedule.is_active %}<span class="badge bg-success">Активний</span>{% endif %}
 
+  {# Перемикач розкладів #}
+  <div class="dropdown">
+    <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+      <i class="bi bi-calendar3 me-1"></i>{{ schedule.name }}
+    </button>
+    <ul class="dropdown-menu dropdown-menu-end" style="max-height:320px;overflow-y:auto;">
+      {% for s in all_schedules %}
+      <li>
+        <a class="dropdown-item {% if s.pk == schedule.pk %}active{% endif %}"
+           href="{% url 'scheduler:teacher_schedule' s.pk teacher.pk %}">
+          {{ s.name }}
+          {% if s.is_active %}<span class="badge bg-success ms-1" style="font-size:.65rem;">активний</span>{% endif %}
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+
   {# Перемикач вчителів #}
   <div class="dropdown">
     <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
@@ -26,6 +44,11 @@
       {% endfor %}
     </ul>
   </div>
+
+  {# Кнопка редагування кабінетів #}
+  <button id="toggleEditBtn" class="btn btn-sm btn-outline-warning ms-auto">
+    <i class="bi bi-pencil-square me-1"></i>Редагувати кабінети
+  </button>
 </div>
 
 <div class="table-card" style="overflow-x:auto;">
@@ -53,16 +76,44 @@
         <td style="padding:2px;">
           {% if cell.week_a %}
           <div style="border-left:3px solid {{ cell.week_a.subject.color }};background:{{ cell.week_a.subject.color }}22;padding:3px 5px;margin-bottom:2px;border-radius:3px;">
-            <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
-            <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_a.subject.short_name|default:cell.week_a.subject.name }}</span>
+            <div class="d-flex align-items-center gap-1">
+              <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
+              <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_a.subject.short_name|default:cell.week_a.subject.name }}</span>
+              <button class="btn-room-edit d-none ms-auto" data-lid="{{ cell.week_a.pk }}"
+                      style="border:none;background:none;padding:0 2px;line-height:1;color:#6c757d;font-size:.72rem;"
+                      title="Змінити кабінет" onclick="event.stopPropagation();">
+                <i class="bi bi-pencil"></i>
+              </button>
+            </div>
             <div class="text-muted" style="font-size:.72rem;">{{ cell.week_a.school_class }}</div>
+            {% if cell.week_a.room %}
+              <div class="room-label text-muted" style="font-size:.7rem;">каб. {{ cell.week_a.room }}</div>
+            {% else %}
+              <div class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;">
+                <i class="bi bi-exclamation-triangle-fill"></i> без кабінету
+              </div>
+            {% endif %}
           </div>
           {% endif %}
           {% if cell.week_b %}
           <div style="border-left:3px solid {{ cell.week_b.subject.color }};background:{{ cell.week_b.subject.color }}22;padding:3px 5px;border-radius:3px;">
-            <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
-            <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_b.subject.short_name|default:cell.week_b.subject.name }}</span>
+            <div class="d-flex align-items-center gap-1">
+              <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
+              <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_b.subject.short_name|default:cell.week_b.subject.name }}</span>
+              <button class="btn-room-edit d-none ms-auto" data-lid="{{ cell.week_b.pk }}"
+                      style="border:none;background:none;padding:0 2px;line-height:1;color:#6c757d;font-size:.72rem;"
+                      title="Змінити кабінет" onclick="event.stopPropagation();">
+                <i class="bi bi-pencil"></i>
+              </button>
+            </div>
             <div class="text-muted" style="font-size:.72rem;">{{ cell.week_b.school_class }}</div>
+            {% if cell.week_b.room %}
+              <div class="room-label text-muted" style="font-size:.7rem;">каб. {{ cell.week_b.room }}</div>
+            {% else %}
+              <div class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;">
+                <i class="bi bi-exclamation-triangle-fill"></i> без кабінету
+              </div>
+            {% endif %}
           </div>
           {% endif %}
         </td>
@@ -80,9 +131,20 @@
             {% elif cell.kind == 'week_b' %}
               <span class="badge text-bg-dark" style="font-size:.6rem;">тижень Б</span>
             {% endif %}
-            {% if lesson.room %}
-              <div class="text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</div>
-            {% endif %}
+            <div class="d-flex align-items-center gap-1 mt-1">
+              {% if lesson.room %}
+                <span class="room-label text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</span>
+              {% else %}
+                <span class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;">
+                  <i class="bi bi-exclamation-triangle-fill"></i> без кабінету
+                </span>
+              {% endif %}
+              <button class="btn-room-edit d-none" data-lid="{{ lesson.pk }}"
+                      style="border:none;background:none;padding:0 2px;line-height:1;color:#6c757d;font-size:.72rem;"
+                      title="Змінити кабінет" onclick="event.stopPropagation();">
+                <i class="bi bi-pencil"></i>
+              </button>
+            </div>
           {% endif %}
         </td>
         {% endwith %}
@@ -95,4 +157,94 @@
     </tbody>
   </table>
 </div>
+
+{# ── Модалка вибору кабінету ── #}
+<div class="modal fade" id="roomModal" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2 px-3">
+        <h6 class="modal-title mb-0">Оберіть кабінет</h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0" id="room-modal-body">
+        <div class="text-center p-3 text-muted small">Завантаження…</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const CSRF     = document.cookie.split('; ').find(r => r.startsWith('csrftoken='))?.split('=')[1] ?? '';
+  const ROOM_URL = "{% url 'scheduler:lesson_set_room' schedule.pk %}";
+  const roomModal = new bootstrap.Modal(document.getElementById('roomModal'));
+  const roomBody  = document.getElementById('room-modal-body');
+  let   roomLid   = null;
+  let   editMode  = false;
+
+  // Кнопка увімкнення режиму редагування
+  const toggleBtn = document.getElementById('toggleEditBtn');
+  toggleBtn.addEventListener('click', function () {
+    editMode = !editMode;
+    this.classList.toggle('btn-outline-warning', !editMode);
+    this.classList.toggle('btn-warning', editMode);
+    document.querySelectorAll('.btn-room-edit').forEach(b => b.classList.toggle('d-none', !editMode));
+  });
+
+  // Клік на кнопку редагування кабінету
+  document.querySelectorAll('.btn-room-edit').forEach(btn => {
+    btn.addEventListener('click', function () {
+      roomLid = this.dataset.lid;
+      roomBody.innerHTML = '<div class="text-center p-3 text-muted small">Завантаження…</div>';
+      roomModal.show();
+      fetch(`${ROOM_URL}?lesson_id=${roomLid}`, { headers: { 'X-CSRFToken': CSRF } })
+        .then(r => r.json())
+        .then(data => renderRoomList(data))
+        .catch(() => { roomBody.innerHTML = '<div class="p-3 text-danger small">Помилка</div>'; });
+    });
+  });
+
+  function renderRoomList(data) {
+    let html = '<div class="list-group list-group-flush">';
+    const noneActive = data.current_room_id === null;
+    html += `<button class="list-group-item list-group-item-action d-flex align-items-center gap-2 py-2 px-3${noneActive ? ' active' : ''}"
+                     onclick="window.setRoom(null)">
+               <i class="bi bi-x-circle text-danger"></i><span>Без кабінету</span>
+               ${noneActive ? '<i class="bi bi-check ms-auto"></i>' : ''}
+             </button>`;
+    if (!data.rooms.length) {
+      html += '<div class="px-3 py-2 text-muted small">Немає доступних кабінетів</div>';
+    }
+    data.rooms.forEach(function(r) {
+      html += `<button class="list-group-item list-group-item-action d-flex align-items-center gap-2 py-2 px-3${r.current ? ' active' : ''}"
+                       onclick="window.setRoom(${r.id})">
+                 <i class="bi bi-door-open text-secondary"></i><span>${r.name}</span>
+                 ${r.current ? '<i class="bi bi-check ms-auto"></i>' : ''}
+               </button>`;
+    });
+    html += '</div>';
+    roomBody.innerHTML = html;
+  }
+
+  window.setRoom = function(roomId) {
+    fetch(ROOM_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+      body: JSON.stringify({lesson_id: roomLid, room_id: roomId}),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      roomModal.hide();
+      if (data.ok) {
+        location.reload();
+      } else {
+        alert(data.error || 'Помилка збереження');
+      }
+    })
+    .catch(function() { roomModal.hide(); alert('Помилка зʼєднання'); });
+  };
+})();
+</script>
 {% endblock %}

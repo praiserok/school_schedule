@@ -43,6 +43,12 @@
           <a href="{% url 'scheduler:schedule_edit' s.pk %}" class="btn btn-sm btn-outline-secondary me-1">
             <i class="bi bi-pencil"></i>
           </a>
+          <form method="post" action="{% url 'scheduler:schedule_copy' s.pk %}" class="d-inline me-1">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-success" title="Копіювати розклад">
+              <i class="bi bi-copy"></i>
+            </button>
+          </form>
           <a href="{% url 'scheduler:schedule_delete' s.pk %}" class="btn btn-sm btn-outline-danger">
             <i class="bi bi-trash"></i>
           </a>

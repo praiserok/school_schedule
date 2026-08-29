@@ -57,6 +57,11 @@ class Subject(models.Model):
         default=2, verbose_name='Макс. різниця паралелей при спільному кабінеті',
         help_text='1 = тільки та сама або сусідня паралель, 2 = ±2 класи тощо',
     )
+    needs_specialized_room = models.BooleanField(
+        default=False, verbose_name='Потребує спеціалізованого кабінету',
+        help_text='Для 1-4 класів: фізкультура та інформатика йдуть у спеціалізований кабінет, '
+                  'решта предметів залишається у кабінеті класу',
+    )
 
     class Meta:
         ordering = ['name']
@@ -69,10 +74,11 @@ class Subject(models.Model):
 
 class Room(models.Model):
     name = models.CharField(max_length=50, verbose_name='Назва / номер')
-    # Якщо задано — кабінет тільки для цього предмету (спортзал, хімія тощо)
-    subject = models.ForeignKey(
-        Subject, null=True, blank=True, on_delete=models.SET_NULL,
-        verbose_name='Тільки для предмету',
+    # Якщо задано — кабінет тільки для цих предметів (спортзал, хімія тощо)
+    subjects = models.ManyToManyField(
+        Subject, blank=True,
+        verbose_name='Тільки для предметів',
+        help_text='Якщо не вибрано — загальний кабінет для будь-якого предмету',
     )
     capacity = models.PositiveSmallIntegerField(default=35, verbose_name='Місткість')
     max_simultaneous = models.PositiveSmallIntegerField(
@@ -96,6 +102,12 @@ class SchoolClass(models.Model):
         Room, null=True, blank=True, on_delete=models.SET_NULL,
         verbose_name='Основний кабінет',
         help_text='Для 1-4 класів: кабінет де проходять більшість уроків',
+    )
+    home_teacher = models.ForeignKey(
+        'Teacher', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='home_classes',
+        verbose_name='Класний керівник',
+        help_text='Уроки цього вчителя завжди отримують основний кабінет класу',
     )
 
     class Meta:

@@ -15,6 +15,13 @@
     <i class="bi bi-pencil-square me-1"></i>Редагувати
   </button>
 
+  <form method="post" action="{% url 'scheduler:schedule_copy' schedule.pk %}" class="d-inline">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-outline-success btn-sm" title="Зберегти копію розкладу">
+      <i class="bi bi-copy me-1"></i>Копіювати
+    </button>
+  </form>
+
   <div class="dropdown">
     <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
       <i class="bi bi-person-badge me-1"></i>Розклад вчителя
@@ -25,6 +32,39 @@
         <a class="dropdown-item" href="{% url 'scheduler:teacher_schedule' schedule.pk t.pk %}">{{ t }}</a>
       </li>
       {% endfor %}
+    </ul>
+  </div>
+
+  <a href="{% url 'scheduler:export_schedule' schedule.pk %}"
+     class="btn btn-success btn-sm">
+    <i class="bi bi-file-earmark-excel me-1"></i>Excel
+  </a>
+
+  <div class="dropdown">
+    <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+      <i class="bi bi-door-open me-1"></i>Кабінети
+    </button>
+    <ul class="dropdown-menu dropdown-menu-end">
+      <li>
+        <form method="post" action="{% url 'scheduler:schedule_assign_rooms' schedule.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="dropdown-item">
+            <i class="bi bi-magic me-2 text-primary"></i>Розставити кабінети
+            <div class="text-muted small ps-4">авто-розкладання по поточних слотах</div>
+          </button>
+        </form>
+      </li>
+      <li><hr class="dropdown-divider"></li>
+      <li>
+        <form method="post" action="{% url 'scheduler:schedule_reset_rooms' schedule.pk %}"
+              onsubmit="return confirm('Скинути всі кабінети розкладу?')">
+          {% csrf_token %}
+          <button type="submit" class="dropdown-item text-danger">
+            <i class="bi bi-x-circle me-2"></i>Скинути всі кабінети
+            <div class="text-muted small ps-4">встановить «без кабінету» для всіх уроків</div>
+          </button>
+        </form>
+      </li>
     </ul>
   </div>
 
@@ -142,8 +182,8 @@
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_a.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.week_a.teacher }}</a>
               </div>
-              {% if cell.week_a.room %}<div class="text-muted" style="font-size:.7rem;">каб. {{ cell.week_a.room }}</div>
-              {% else %}<div style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
+              {% if cell.week_a.room %}<div class="text-muted room-label" style="font-size:.7rem;">каб. {{ cell.week_a.room }}</div>
+              {% else %}<div class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
             </div>
             {% endif %}
             {% if cell.week_b %}
@@ -167,8 +207,8 @@
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_b.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.week_b.teacher }}</a>
               </div>
-              {% if cell.week_b.room %}<div class="text-muted" style="font-size:.7rem;">каб. {{ cell.week_b.room }}</div>
-              {% else %}<div style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
+              {% if cell.week_b.room %}<div class="text-muted room-label" style="font-size:.7rem;">каб. {{ cell.week_b.room }}</div>
+              {% else %}<div class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
             </div>
             {% endif %}
           </td>
@@ -225,7 +265,18 @@
                 {% endif %}
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.extra.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.extra.teacher }}</a>
-                {% if cell.extra.room %}<div class="text-muted" style="font-size:.7rem;">каб. {{ cell.extra.room }}</div>{% else %}<div style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
+                <div class="d-flex align-items-center gap-1">
+                  {% if cell.extra.room %}
+                    <span class="text-muted room-label" style="font-size:.7rem;">каб. {{ cell.extra.room }}</span>
+                  {% else %}
+                    <span class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</span>
+                  {% endif %}
+                  <button class="btn-room-edit d-none" data-lid="{{ cell.extra.pk }}"
+                          style="border:none;background:none;padding:0 2px;line-height:1;color:#6c757d;font-size:.72rem;"
+                          title="Змінити кабінет" onclick="event.stopPropagation();">
+                    <i class="bi bi-pencil"></i>
+                  </button>
+                </div>
               </div>
               {% endif %}
             {% endif %}
@@ -484,6 +535,20 @@
     roomBody.innerHTML = html;
   }
 
+  function updateRoomLabel(container, roomName) {
+    const lbl = container.querySelector('.room-label');
+    if (!lbl) return;
+    if (roomName) {
+      lbl.className = 'text-muted room-label';
+      lbl.style.cssText = 'font-size:.7rem;';
+      lbl.innerHTML = `каб. ${roomName}`;
+    } else {
+      lbl.className = 'room-label';
+      lbl.style.cssText = 'font-size:.7rem;color:#dc3545;font-weight:600;';
+      lbl.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i> без кабінету';
+    }
+  }
+
   window.setRoom = function(roomId) {
     fetch(ROOM_URL, {
       method: 'POST',
@@ -494,7 +559,20 @@
     .then(data => {
       if (data.ok) {
         roomModal.hide();
-        location.reload();
+        // Оновлюємо лейбл кабінету в DOM без перезавантаження сторінки
+        const container = document.querySelector(
+          `.sch-lesson[data-lid="${roomLid}"], .sch-alt-lesson[data-lid="${roomLid}"]`
+        );
+        if (container) {
+          updateRoomLabel(container, data.room_name);
+          // Alt-уроки: сусідній тиждень у тій самій td теж отримав той самий кабінет
+          const td = container.closest('td');
+          if (td) {
+            td.querySelectorAll('.sch-alt-lesson').forEach(el => {
+              if (el !== container) updateRoomLabel(el, data.room_name);
+            });
+          }
+        }
       } else {
         showError(data.error || 'Помилка');
         roomModal.hide();

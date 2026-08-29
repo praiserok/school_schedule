@@ -15,7 +15,7 @@ class SubjectAdmin(admin.ModelAdmin):
 
 @admin.register(Room)
 class RoomAdmin(admin.ModelAdmin):
-    list_display = ['name', 'subject', 'capacity']
+    list_display = ['name', 'capacity']
 
 
 @admin.register(SchoolClass)

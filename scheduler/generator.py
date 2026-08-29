@@ -53,15 +53,19 @@ def _blocked_slots(teacher, D: int, P: int) -> set:
 def _summary(schedule, assignments, base_count, alt_count, canonical,
              class_total_A, teachers, teacher_assignments, classes, D, P) -> str:
     cls_by_pk = {c.pk: c for c in classes}
-    lines = [f'[{D} dn/tyj, {P} ur/den]']
-    lines.append('Klasy (urokiv u tyzhni A):')
+    total_slots = D * P
+    lines = [f'[{D} дн/тиж, {P} ур/день, всього {total_slots} слотів]']
+    lines.append('Класи (уроків у тижні А / всього слотів):')
     for cls_pk, total in sorted(class_total_A.items()):
         cls = cls_by_pk.get(cls_pk)
         if cls is None:
             continue
         avg = f'{total/D:.1f}'
-        lines.append(f'  {cls}: {total} ur/tyj (~{avg}/den, max {P})')
-    lines.append('Vchyteli (urokiv u tyzhni A / limit):')
+        free = total_slots - total
+        pct = total * 100 // total_slots
+        warn = ' ⚠ ДУЖЕ ЩІЛЬНО' if pct >= 90 else (' ↑ щільно' if pct >= 80 else '')
+        lines.append(f'  {cls}: {total}/{total_slots} (~{avg}/день, вільно {free} сл){warn}')
+    lines.append('Вчителі (уроків у тижні А / ліміт):')
     for t in teachers:
         t_total = sum(base_count[a_i] + alt_count[a_i] for a_i in teacher_assignments[t.pk])
         if t_total == 0:
@@ -69,13 +73,16 @@ def _summary(schedule, assignments, base_count, alt_count, canonical,
         mask = _avail_mask(t, D)
         avail = mask.count('1')
         lim = avail * t.max_lessons_per_day
-        lines.append(f'  {t}: {t_total}/{lim} ({avail} dn x {t.max_lessons_per_day} ur)')
+        pct = t_total * 100 // lim if lim else 0
+        warn = ' ⚠ ЩІЛЬНО' if pct >= 90 else ''
+        lines.append(f'  {t}: {t_total}/{lim} ({avail} дн x {t.max_lessons_per_day} ур){warn}')
     return '\n'.join(lines)
 
 
 def _diagnose(schedule, assignments, base_count, alt_count, canonical,
               class_total_A, teachers, teacher_assignments, classes, rooms,
-              specialized_capacity, D, P) -> list:
+              specialized_capacity, D, P,
+              cross_class_alt_pairs=None) -> list:
     issues = []
     total_slots = D * P
 
@@ -119,7 +126,7 @@ def _diagnose(schedule, assignments, base_count, alt_count, canonical,
             continue
         subj_obj = assignments[demand_ais[0]].subject
         effective_cap = cap if subj_obj.allow_shared_room else sum(
-            1 for r in rooms if r.subject_id == subj_id
+            1 for r in rooms if subj_id in r._subject_ids
         )
         total_lessons = sum(base_count[a_i] + alt_count[a_i] for a_i in demand_ais)
         min_slots_needed = ceil(total_lessons / effective_cap)
@@ -215,6 +222,55 @@ def _diagnose(schedule, assignments, base_count, alt_count, canonical,
                 issues.append(
                     f'Клас {c}: дисбаланс груп — гр.{ref_g} має {ref_h} ур/тиж, '
                     f'гр.{g} має {h} ур/тиж. Виправте навантаження щоб суми збіглися.'
+                )
+
+    # -------------------------------------------------------------------------
+    # Near-full class warning (≥90% of slots used) — soft indicator of tight search
+    for c in classes:
+        total = class_total_A[c.pk]
+        pct = total * 100 // total_slots
+        if pct >= 90:
+            free = total_slots - total
+            issues.append(
+                f'Клас {c}: {total}/{total_slots} слотів ({pct}%) — лише {free} вільних. '
+                f'Дуже мало простору для маневру; солвер може не встигнути знайти рішення.'
+            )
+
+    # -------------------------------------------------------------------------
+    # Cross-class alt-pairs analysis: each pair forces a shared slot (both weeks).
+    # The teacher occupies that slot in week A (for class_A) and week B (for class_B),
+    # which is equivalent to a "base" slot for the teacher — harder than two independent halves.
+    if cross_class_alt_pairs:
+        teacher_by_pk = {t.pk: t for t in teachers}
+        tight_classes = {
+            c.pk for c in classes
+            if class_total_A[c.pk] * 100 // total_slots >= 80
+        }
+        for (a_x, a_y) in cross_class_alt_pairs:
+            ax, ay = assignments[a_x], assignments[a_y]
+            t = teacher_by_pk.get(ax.teacher_id)
+            if t is None:
+                continue
+            t_total = sum(base_count[i] + alt_count[i] for i in teacher_assignments[t.pk])
+            mask = _avail_mask(t, D)
+            avail = mask.count('1')
+            lim = avail * t.max_lessons_per_day
+            t_pct = t_total * 100 // lim if lim else 0
+            cls_a_pct = class_total_A[ax.school_class_id] * 100 // total_slots
+            cls_b_pct = class_total_A[ay.school_class_id] * 100 // total_slots
+            subj_name = ax.subject.short_name or ax.subject.name
+            both_tight = (
+                ax.school_class_id in tight_classes
+                and ay.school_class_id in tight_classes
+            )
+            teacher_tight = t_pct >= 80
+            if both_tight or teacher_tight:
+                issues.append(
+                    f'Вчитель {t} ({t_total}/{lim} ур, {t_pct}%): '
+                    f'cross-пара {ax.school_class}+{ay.school_class}/{subj_name} '
+                    f'— класи заповнені на {cls_a_pct}% і {cls_b_pct}%, '
+                    f'вчитель на {t_pct}%. Ця пара змушує зайняти 1 слот в обох тижнях, '
+                    f'що обмежує гнучкість планування.'
                 )
 
     return issues
@@ -1080,12 +1136,14 @@ def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
     )
     teachers = list(Teacher.objects.all())
     classes  = list(SchoolClass.objects.select_related('home_room').all())
-    rooms    = list(Room.objects.select_related('subject').all())
+    rooms    = list(Room.objects.prefetch_related('subjects').all())
+    for r in rooms:
+        r._subject_ids = frozenset(s.pk for s in r.subjects.all())
 
     specialized_capacity: dict = defaultdict(int)
     for r in rooms:
-        if r.subject_id is not None:
-            specialized_capacity[r.subject_id] += r.max_simultaneous
+        for sid in r._subject_ids:
+            specialized_capacity[sid] += r.max_simultaneous
 
     class_assignments   = {c.pk: [] for c in classes}
     teacher_assignments = {t.pk: [] for t in teachers}
@@ -1651,7 +1709,7 @@ def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
     for subj_pk, ais in subj_assignments.items():
         subj_obj = assignments[ais[0]].subject
         cap = (specialized_capacity[subj_pk] if subj_obj.allow_shared_room
-               else sum(1 for r in rooms if r.subject_id == subj_pk))
+               else sum(1 for r in rooms if subj_pk in r._subject_ids))
         for d in range(D):
             for p in range(P):
                 model.add(sum(occ_A(a_i, d, p) for a_i in ais) <= cap)
@@ -1980,7 +2038,7 @@ def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
 
     # -------------------------------------------------------------------------
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 90.0
+    solver.parameters.max_time_in_seconds = 180.0
     solver.parameters.num_search_workers = 8
     solver.parameters.log_search_progress = False
 
@@ -1992,7 +2050,8 @@ def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
         try:
             issues = _diagnose(schedule, assignments, base_count, alt_count, canonical,
                                class_total_A, teachers, teacher_assignments, classes, rooms,
-                               specialized_capacity, D, P)
+                               specialized_capacity, D, P,
+                               cross_class_alt_pairs=cross_class_alt_pairs)
         except Exception as e:
             issues = [f'(помилка діагностики: {e})']
         lines = [f'Розвязок не знайдено ({solver.status_name(status)})']
@@ -2078,8 +2137,9 @@ def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
     rooms_by_subject: dict = defaultdict(list)
     general_rooms: list = []
     for r in rooms:
-        if r.subject_id is not None:
-            rooms_by_subject[r.subject_id].append(r)
+        if r._subject_ids:
+            for sid in r._subject_ids:
+                rooms_by_subject[sid].append(r)
         else:
             general_rooms.append(r)
 
@@ -2107,7 +2167,7 @@ def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
             return None
         if school_class.home_room_id:
             hr = school_class.home_room
-            if hr.subject_id is None and _can_use(hr, subject, grade, usage_dp):
+            if not hr._subject_ids and _can_use(hr, subject, grade, usage_dp):
                 return hr
         for r in general_rooms:
             if r.pk not in home_room_ids and _can_use(r, subject, grade, usage_dp):
@@ -2203,3 +2263,202 @@ def generate(schedule_id: int, optimize_teachers: bool = True) -> tuple:
             f'Готово! {total} уроків '
             f'({n_base} базових x2 + {n_alt_a} черг.А + {n_alt_b} черг.Б) '
             f'за {solver.wall_time:.1f}с')
+
+
+def assign_rooms(schedule) -> tuple[int, int]:
+    """Assign rooms to existing lessons of a schedule without changing slots.
+
+    Mirrors the generator's room-assignment phase:
+      - base lessons (week 0 + week 1 at same slot) → one room, marked in both week usages
+      - alt-A (week 0 only) → room marked in week-A usage
+      - alt-B (week 1 only) → room marked in week-B usage
+    Returns (assigned_count, total_count).
+    """
+    rooms = list(Room.objects.prefetch_related('subjects').all())
+    for r in rooms:
+        r._subject_ids = frozenset(s.pk for s in r.subjects.all())
+    lessons = list(
+        schedule.lessons
+        .select_related('school_class', 'subject', 'teacher', 'school_class__home_room')
+        .order_by('day', 'period', 'week')
+    )
+    if not lessons:
+        return 0, 0
+
+    rooms_by_pk = {r.pk: r for r in rooms}  # rooms вже мають _subject_ids
+    classes_qs = list(SchoolClass.objects.all())
+    home_room_ids = {c.home_room_id for c in classes_qs if c.home_room_id}
+    cls_home_room = {
+        c.pk: rooms_by_pk[c.home_room_id]
+        for c in classes_qs
+        if c.home_room_id and c.home_room_id in rooms_by_pk
+    }
+    # cls_home_teacher: {class_pk: teacher_pk} — класний керівник отримує home_room першочергово
+    cls_home_teacher = {
+        c.pk: c.home_teacher_id
+        for c in classes_qs
+        if c.home_teacher_id and c.home_room_id
+    }
+    # Кабінети 1-4 класів — зарезервовані, старші класи їх не займають
+    junior_home_room_ids = {
+        c.home_room_id for c in classes_qs
+        if c.grade <= 4 and c.home_room_id and c.home_room_id in rooms_by_pk
+    }
+
+    rooms_by_subject: dict = defaultdict(list)
+    general_rooms: list = []
+    for r in rooms:
+        if r._subject_ids:
+            for sid in r._subject_ids:
+                rooms_by_subject[sid].append(r)
+        else:
+            general_rooms.append(r)
+    # Загальні кабінети без урахування зарезервованих для 1-4 класів
+    senior_general_rooms = [r for r in general_rooms if r.pk not in junior_home_room_ids]
+
+    def _can_use(r, subject, grade, usage_dp):
+        grades_here = list(dict.fromkeys(usage_dp.get(r.pk, [])))
+        if len(grades_here) >= r.max_simultaneous:
+            return False
+        if grades_here:
+            if not subject.allow_shared_room:
+                return False
+            if any(abs(grade - g) > subject.max_grade_diff for g in grades_here):
+                return False
+        return True
+
+    def _mark(r, grade, usage_dp):
+        usage_dp.setdefault(r.pk, []).append(grade)
+
+    def find_room(subject, school_class, usage_dp):
+        grade = school_class.grade
+        specialized = rooms_by_subject.get(subject.pk, [])
+        if grade <= 4:
+            if subject.needs_specialized_room:
+                # Фізкультура / інформатика → тільки спеціалізований кабінет
+                for r in specialized:
+                    if _can_use(r, subject, grade, usage_dp):
+                        return r
+                return None
+            else:
+                # Всі інші предмети → насамперед власний кабінет класу
+                hr = cls_home_room.get(school_class.pk)
+                if hr and _can_use(hr, subject, grade, usage_dp):
+                    return hr
+                # Запасний варіант (напр. друга група — home_room вже зайнятий):
+                # будь-який вільний кабінет крім home_room будь-якого молодшого класу
+                for r in rooms:
+                    if r.pk in junior_home_room_ids:
+                        continue
+                    if _can_use(r, subject, grade, usage_dp):
+                        return r
+                return None
+        else:
+            # Класи 5+: спочатку спеціалізований кабінет, потім будь-який вільний
+            # (home_room кабінети 1-4 класів не чіпаємо)
+            for r in specialized:
+                if _can_use(r, subject, grade, usage_dp):
+                    return r
+            for r in senior_general_rooms:
+                if _can_use(r, subject, grade, usage_dp):
+                    return r
+            return None
+
+    # Shared-room subjects (PE/gym etc.)
+    shared_subj_ids: set = set()
+    for l in lessons:
+        if l.subject.allow_shared_room:
+            shared_subj_ids.add(l.subject_id)
+
+    # Group lessons into families: same (d, p, teacher, class, subject, group)
+    # → base family has both week=0 and week=1; alt has only one week.
+    family_key = lambda l: (l.day, l.period, l.teacher_id,
+                            l.school_class_id, l.subject_id, l.group)
+    families: dict = defaultdict(list)
+    for l in lessons:
+        families[family_key(l)].append(l)
+
+    # Classify: base vs alt-A vs alt-B
+    base_families:  list = []   # [(d, p, gk, [lesson_wk0, lesson_wk1])]
+    alt_a_families: list = []   # [(d, p, gk, lesson)]
+    alt_b_families: list = []   # [(d, p, gk, lesson)]
+
+    for key, fam in families.items():
+        d, p = key[0], key[1]
+        rep = fam[0]
+        gk = rep.school_class.grade if rep.subject_id in shared_subj_ids else 0
+        weeks = {l.week for l in fam}
+        if 0 in weeks and 1 in weeks:
+            base_families.append((d, p, gk, fam))
+        elif 0 in weeks:
+            alt_a_families.append((d, p, gk, next(l for l in fam if l.week == 0)))
+        else:
+            alt_b_families.append((d, p, gk, next(l for l in fam if l.week == 1)))
+
+    def _is_home_teacher(fam_or_lesson) -> bool:
+        """Повертає True якщо вчитель цього уроку є класним керівником класу."""
+        if isinstance(fam_or_lesson, list):
+            l = fam_or_lesson[0]
+        else:
+            l = fam_or_lesson
+        return cls_home_teacher.get(l.school_class_id) == l.teacher_id
+
+    def _make_sort_key(entries):
+        # Within each slot:
+        # 1. Молодші класи (1-4) першими — щоб встигли зайняти свій home_room
+        # 2. Спільні кабінети (PE/gym) — групи одного класу разом
+        # 3. Класний керівник раніше — щоб зайняв home_room до другої групи
+        counts = Counter((d, p, gk) for d, p, gk, _ in entries if gk != 0)
+        def key(e):
+            d, p, gk, payload = e
+            same = counts.get((d, p, gk), 1) if gk != 0 else 1
+            home_priority = 0 if _is_home_teacher(payload) else 1
+            rep = payload[0] if isinstance(payload, list) else payload
+            is_junior = 0 if rep.school_class.grade <= 4 else 1
+            return (d, p, is_junior, -same, gk, home_priority)
+        return key
+
+    base_families.sort(key=_make_sort_key(base_families))
+    alt_a_families.sort(key=_make_sort_key(alt_a_families))
+    alt_b_families.sort(key=_make_sort_key(alt_b_families))
+
+    room_usage_A: dict = {}
+    room_usage_B: dict = {}
+    assigned = 0
+
+    # 1. Base lessons: mark room in BOTH week usages
+    for d, p, gk, fam in base_families:
+        rep = fam[0]
+        uA = room_usage_A.setdefault((d, p), {})
+        uB = room_usage_B.setdefault((d, p), {})
+        room = find_room(rep.subject, rep.school_class, uA)
+        if room:
+            _mark(room, rep.school_class.grade, uA)
+            _mark(room, rep.school_class.grade, uB)
+        for l in fam:
+            l.room = room
+            if room:
+                assigned += 1
+
+    # 2. Alt-A lessons: mark in week-A usage only
+    for d, p, gk, lesson in alt_a_families:
+        uA = room_usage_A.setdefault((d, p), {})
+        room = find_room(lesson.subject, lesson.school_class, uA)
+        if room:
+            _mark(room, lesson.school_class.grade, uA)
+        lesson.room = room
+        if room:
+            assigned += 1
+
+    # 3. Alt-B lessons: mark in week-B usage only
+    for d, p, gk, lesson in alt_b_families:
+        uB = room_usage_B.setdefault((d, p), {})
+        room = find_room(lesson.subject, lesson.school_class, uB)
+        if room:
+            _mark(room, lesson.school_class.grade, uB)
+        lesson.room = room
+        if room:
+            assigned += 1
+
+    Lesson.objects.bulk_update(lessons, ['room'])
+    return assigned, len(lessons)
