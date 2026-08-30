@@ -13,6 +13,8 @@ from .forms import (
     BellScheduleForm, BellPeriodForm, DAYS_LABELS, DAYS_FULL, MAX_PERIODS,
 )
 
+DAYS_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд']
+
 
 # ─── Dashboard ───────────────────────────────────────────────────────────────
 
@@ -547,8 +549,18 @@ def schedule_assign_rooms(request, pk):
     """Розставити кабінети по вже існуючому розкладу (не змінюючи слоти)."""
     from .generator import assign_rooms
     schedule = get_object_or_404(Schedule, pk=pk)
-    assigned, total = assign_rooms(schedule)
-    messages.success(request, f'Кабінети розставлено: {assigned}/{total} уроків отримали кабінет.')
+    mode = request.POST.get('mode', 'all')
+    if mode not in ('all', 'specialized', 'junior', 'senior'):
+        mode = 'all'
+    mode_labels = {
+        'all':        'Всі кабінети',
+        'specialized': 'Фізкультура / Інформатика',
+        'junior':     '1-4 класи',
+        'senior':     '5+ класи',
+    }
+    assigned, eligible = assign_rooms(schedule, mode=mode)
+    label = mode_labels[mode]
+    messages.success(request, f'{label}: {assigned}/{eligible} уроків отримали кабінет.')
     return redirect('scheduler:schedule_view', pk=pk)
 
 
@@ -802,10 +814,10 @@ def lesson_set_room(request, pk):
         return JsonResponse({'ok': False, 'error': 'Некоректний запит'}, status=400)
 
     lesson = get_object_or_404(Lesson, pk=lesson_id, schedule=schedule)
+    family_pks, is_regular = _lesson_family(schedule, lesson)
 
     if room_id is not None:
         room = get_object_or_404(Room, pk=room_id)
-        family_pks, is_regular = _lesson_family(schedule, lesson)
         used_filter = {'schedule': schedule, 'day': lesson.day, 'period': lesson.period, 'room': room}
         if not is_regular:
             used_filter['week'] = lesson.week
@@ -824,7 +836,9 @@ def lesson_set_room(request, pk):
     # Синхронізуємо кабінет на всю сім'ю (обидва тижні мають однаковий кабінет)
     Lesson.objects.filter(pk__in=family_pks).exclude(pk=lesson.pk).update(room=lesson.room)
 
-    return JsonResponse({'ok': True, 'room_name': lesson.room.name if lesson.room else None})
+    return JsonResponse({'ok': True,
+                         'room_name': lesson.room.name if lesson.room else None,
+                         'room_id': lesson.room_id})
 
 
 @require_POST
@@ -925,6 +939,15 @@ def slot_lessons(request, pk):
     except (KeyError, ValueError):
         return JsonResponse({'error': 'bad params'}, status=400)
 
+    # Предмети поточного кабінету (якщо передано room_id)
+    room_subject_ids: set = set()
+    try:
+        room_id = int(request.GET['room_id'])
+        room_obj = Room.objects.prefetch_related('subjects').get(pk=room_id)
+        room_subject_ids = {s.pk for s in room_obj.subjects.all()}
+    except (KeyError, ValueError, Room.DoesNotExist):
+        pass
+
     lessons = (Lesson.objects
                .filter(schedule=schedule, day=day, period=period)
                .select_related('school_class', 'subject', 'teacher', 'room')
@@ -940,8 +963,10 @@ def slot_lessons(request, pk):
     for ls in families.values():
         has_room = all(x.room is not None for x in ls)
         l = ls[0] if has_room else next(x for x in ls if x.room is None)
-        regular = len(ls) >= 2  # обидва тижні → звичайний урок
+        regular = len(ls) >= 2
         week_label = '' if regular else ('А' if l.week == 0 else 'Б')
+        # match=True якщо предмет уроку входить до профілю цього кабінету
+        match = bool(room_subject_ids) and l.subject_id in room_subject_ids
         entry = {
             'id': l.pk,
             'class': str(l.school_class),
@@ -950,6 +975,7 @@ def slot_lessons(request, pk):
             'teacher': str(l.teacher),
             'group': l.group,
             'week_label': week_label,
+            'match': match,
         }
         if has_room:
             entry['room'] = l.room.name
@@ -957,9 +983,91 @@ def slot_lessons(request, pk):
         else:
             no_room.append(entry)
 
-    no_room.sort(key=lambda x: x['class'])
-    with_room.sort(key=lambda x: x['class'])
+    # Профільні предмети — вперед, решта за класом
+    sort_key = lambda x: (0 if x['match'] else 1, x['class'])
+    no_room.sort(key=sort_key)
+    with_room.sort(key=sort_key)
     return JsonResponse({'no_room': no_room, 'with_room': with_room})
+
+
+def schedule_unassigned(request, pk):
+    """GET: повертає всі уроки без кабінету + вільні кімнати для кожного слоту."""
+    from django.http import JsonResponse
+    from django.db.models import Count
+    schedule = get_object_or_404(Schedule, pk=pk)
+
+    raw = (Lesson.objects
+           .filter(schedule=schedule, room__isnull=True)
+           .select_related('school_class', 'subject', 'teacher')
+           .order_by('day', 'period', 'school_class__grade', 'school_class__letter'))
+
+    families: dict = defaultdict(list)
+    for l in raw:
+        families[(l.day, l.period, l.school_class_id, l.subject_id, l.group)].append(l)
+
+    if not families:
+        return JsonResponse({'items': []})
+
+    # Зайнятість кабінетів агрегується в БД (GROUP BY замість Python-підрахунку)
+    occupancy: dict = defaultdict(lambda: defaultdict(int))
+    for row in (Lesson.objects
+                .filter(schedule=schedule, room__isnull=False)
+                .values('day', 'period', 'week', 'room_id')
+                .annotate(cnt=Count('pk'))):
+        occupancy[(row['day'], row['period'], row['week'])][row['room_id']] = row['cnt']
+
+    rooms = list(Room.objects.prefetch_related('subjects').order_by('name'))
+    room_subject_ids = {r.pk: frozenset(s.pk for s in r.subjects.all()) for r in rooms}
+
+    # Індекс для швидкого пошуку: спеціалізовані кімнати по предмету + загальні
+    rooms_by_subject: dict = defaultdict(list)
+    general_rooms: list = []
+    for r in rooms:
+        if room_subject_ids[r.pk]:
+            for sid in room_subject_ids[r.pk]:
+                rooms_by_subject[sid].append(r)
+        else:
+            general_rooms.append(r)
+
+    items = []
+    for (day, period, cls_id, subj_id, group), ls in families.items():
+        rep = ls[0]
+        missing_weeks = {l.week for l in ls}
+
+        # Профільні кімнати для предмету + загальні кімнати без профілю
+        candidate_rooms = rooms_by_subject.get(subj_id, []) + general_rooms
+        free_rooms = []
+        for r in candidate_rooms:
+            if all(occupancy[(day, period, w)].get(r.pk, 0) < r.max_simultaneous
+                   for w in missing_weeks):
+                free_rooms.append({'id': r.pk, 'name': r.name})
+
+        items.append({
+            'lid':      rep.pk,
+            'day':      day,
+            'day_name': DAYS_SHORT[day] if day < len(DAYS_SHORT) else str(day + 1),
+            'period':   period + 1,
+            'class':    str(rep.school_class),
+            'subject':  rep.subject.short_name or rep.subject.name,
+            'color':    rep.subject.color,
+            'teacher':  str(rep.teacher),
+            'group':    rep.group or '',
+            'free_rooms': free_rooms,
+        })
+
+    return JsonResponse({'items': items})
+
+
+def schedule_unassigned_count(request, pk):
+    """GET: повертає лише кількість унікальних сімей без кабінету (для бейджа)."""
+    from django.http import JsonResponse
+    schedule = get_object_or_404(Schedule, pk=pk)
+    count = (Lesson.objects
+             .filter(schedule=schedule, room__isnull=True)
+             .values('day', 'period', 'school_class_id', 'subject_id', 'group')
+             .distinct()
+             .count())
+    return JsonResponse({'count': count})
 
 
 def room_schedule(request, schedule_pk, room_pk):
@@ -1014,16 +1122,39 @@ def room_schedule(request, schedule_pk, room_pk):
 
     all_rooms = Room.objects.prefetch_related('subjects').all()
     all_schedules = Schedule.objects.order_by('-created_at')
+    all_teachers = (Teacher.objects
+                    .filter(lesson__schedule=schedule)
+                    .distinct()
+                    .order_by('last_name', 'first_name'))
     return render(request, 'scheduler/room_schedule.html', {
         'schedule': schedule,
         'room': room,
         'all_rooms': all_rooms,
         'all_schedules': all_schedules,
+        'all_teachers': all_teachers,
         'days': days,
         'periods': periods,
         'grid': grid,
         'bell_times': bell_times,
     })
+
+
+@require_POST
+def assign_teacher_to_room(request, pk):
+    """POST JSON {teacher_id, room_id}: призначити всі уроки вчителя в цей кабінет."""
+    from django.http import JsonResponse
+    import json
+    schedule = get_object_or_404(Schedule, pk=pk)
+    try:
+        data = json.loads(request.body)
+        teacher_id = int(data['teacher_id'])
+        room_id = int(data['room_id'])
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return JsonResponse({'ok': False, 'error': 'Некоректний запит'}, status=400)
+    teacher = get_object_or_404(Teacher, pk=teacher_id)
+    room = get_object_or_404(Room, pk=room_id)
+    count = schedule.lessons.filter(teacher=teacher).update(room=room)
+    return JsonResponse({'ok': True, 'count': count, 'teacher': str(teacher), 'room': room.name})
 
 
 def teacher_schedule(request, schedule_pk, teacher_pk):
@@ -1746,4 +1877,253 @@ def export_schedule(request, pk):
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
     resp['Content-Disposition'] = f'attachment; filename="schedule_{safe_sched}.xlsx"'
+    return resp
+
+
+# ─── Rooms XLSX export ────────────────────────────────────────────────────────
+
+def export_rooms(request, pk):
+    """XLSX: один аркуш на кожен кабінет з його розкладом уроків."""
+    import io
+    from django.http import HttpResponse
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.cell.text import InlineFont
+    from openpyxl.cell.rich_text import TextBlock, CellRichText
+
+    schedule = get_object_or_404(Schedule, pk=pk)
+    lessons = list(schedule.lessons
+                   .select_related('school_class', 'subject', 'teacher', 'room')
+                   .filter(room__isnull=False)
+                   .order_by('week', 'group'))
+
+    room_ids = {l.room_id for l in lessons}
+    rooms = Room.objects.filter(pk__in=room_ids).prefetch_related('subjects').order_by('name')
+
+    D = schedule.days_per_week
+    P = schedule.lessons_per_day
+    days_full = DAYS_FULL[:D]
+
+    bell_times = {}
+    if schedule.bell_schedule_id:
+        from .models import BellPeriod
+        bell_times = {
+            bp.number - 1: bp
+            for bp in BellPeriod.objects.filter(bell_schedule_id=schedule.bell_schedule_id)
+        }
+
+    # ── Стилі (ті самі, що в export_schedule) ────────────────────────────────
+    C_NAVY  = '1B3A6B'
+    C_BLUE  = '2C5F8A'
+    C_LT_BLUE = 'D6E4F0'
+    C_WHITE = 'FFFFFF'
+    C_GRAY  = 'F0F0F0'
+    C_SUBJ  = '0D1B4B'
+    C_INFO  = '444444'
+
+    thin    = Side(style='thin',   color='BFBFBF')
+    brd     = Border(left=thin, right=thin, top=thin, bottom=thin)
+    brd_hdr = Border(left=thin, right=thin, top=thin, bottom=Side(style='medium', color=C_NAVY))
+
+    f_title  = Font(name='Calibri', bold=True, size=14, color=C_WHITE)
+    f_day    = Font(name='Calibri', bold=True, size=11, color=C_WHITE)
+    f_period = Font(name='Calibri', bold=True, size=10, color=C_NAVY)
+    f_subj   = InlineFont(rFont='Calibri', b=True,  sz=20, color=C_SUBJ)
+    f_info   = InlineFont(rFont='Calibri', b=False, sz=18, color=C_INFO)
+    f_dim    = InlineFont(rFont='Calibri', b=False, sz=16, color='999999')
+    f_alt_a  = InlineFont(rFont='Calibri', b=True,  sz=18, color='1B5E20')
+    f_alt_b  = InlineFont(rFont='Calibri', b=True,  sz=18, color='BF360C')
+
+    fill_navy  = PatternFill('solid', fgColor=C_NAVY)
+    fill_blue  = PatternFill('solid', fgColor=C_BLUE)
+    fill_lblue = PatternFill('solid', fgColor=C_LT_BLUE)
+    fill_white = PatternFill('solid', fgColor=C_WHITE)
+    fill_gray  = PatternFill('solid', fgColor=C_GRAY)
+
+    al_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    al_left   = Alignment(horizontal='left',   vertical='center', wrap_text=True)
+
+    def _hex_rgb(h):
+        try:
+            h = (h or '').lstrip('#')
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)) if len(h) == 6 else None
+        except Exception:
+            return None
+
+    def _subject_fill(color_hex, alpha=0.22):
+        rgb = _hex_rgb(color_hex)
+        if not rgb:
+            return fill_white
+        r2 = round(rgb[0] * alpha + 255 * (1 - alpha))
+        g2 = round(rgb[1] * alpha + 255 * (1 - alpha))
+        b2 = round(rgb[2] * alpha + 255 * (1 - alpha))
+        return PatternFill('solid', fgColor=f'{r2:02X}{g2:02X}{b2:02X}')
+
+    def _count_lines(val):
+        if not val:
+            return 1
+        if isinstance(val, str):
+            return val.count('\n') + 1
+        return sum(b.text.count('\n') if hasattr(b, 'text') else 0 for b in val) + 1
+
+    def _period_label(p):
+        bp = bell_times.get(p)
+        if bp:
+            return f'{p + 1}\n{bp.start_time.strftime("%H:%M")}–{bp.end_time.strftime("%H:%M")}'
+        return str(p + 1)
+
+    def _room_cell_rich(lessons_in_slot):
+        """Rich text для слоту кабінету: предмет, клас, вчитель."""
+        parts = []
+        for i, l in enumerate(lessons_in_slot):
+            subj = l.subject.short_name or l.subject.name
+            cls_str = str(l.school_class)
+            grp = f' гр.{l.group}' if l.group else ''
+            teacher_str = str(l.teacher)
+            prefix = '\n' if i else ''
+            parts += [
+                TextBlock(f_subj,  f'{prefix}{subj}'),
+                TextBlock(f_info,  f'\n{cls_str}{grp}'),
+                TextBlock(f_dim,   f'\n{teacher_str}'),
+            ]
+        return CellRichText(*parts) if parts else ''
+
+    def _build_room_grid(room_pk):
+        """Побудувати grid для одного кабінету.
+
+        Сім'я з обома тижнями (0 і 1) → звичайний урок, без мітки А/Б.
+        Сім'я тільки з тижнем 0 → alt-A; тільки з тижнем 1 → alt-B.
+        """
+        r_lessons = [l for l in lessons if l.room_id == room_pk]
+        raw = {d: {p: [] for p in range(P)} for d in range(D)}
+        for l in r_lessons:
+            if l.day < D and l.period < P:
+                raw[l.day][l.period].append(l)
+
+        result = {}
+        for d in range(D):
+            result[d] = {}
+            for p in range(P):
+                slot = raw[d][p]
+                if not slot:
+                    result[d][p] = None
+                    continue
+
+                # Групуємо по сім'ї
+                families: dict = {}
+                for l in slot:
+                    key = (l.teacher_id, l.school_class_id, l.subject_id, l.group)
+                    families.setdefault(key, []).append(l)
+
+                regular, alt_a, alt_b = [], [], []
+                for fam in families.values():
+                    weeks = {l.week for l in fam}
+                    if 0 in weeks and 1 in weeks:
+                        regular.append(fam[0])   # обидва тижні → звичайний, беремо один
+                    elif 0 in weeks:
+                        alt_a.append(next(l for l in fam if l.week == 0))
+                    else:
+                        alt_b.append(next(l for l in fam if l.week == 1))
+
+                if alt_a or alt_b:
+                    result[d][p] = {'kind': 'alt', 'regular': regular,
+                                    'week_a': alt_a, 'week_b': alt_b}
+                else:
+                    result[d][p] = {'kind': 'regular', 'lessons': regular}
+        return result
+
+    def _write_room_sheet(ws, title, grid):
+        ws.column_dimensions['A'].width = 14
+        for i in range(D):
+            ws.column_dimensions[get_column_letter(i + 2)].width = 36
+
+        # Заголовок
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=D + 1)
+        c = ws.cell(row=1, column=1, value=title)
+        c.font = f_title; c.fill = fill_navy; c.alignment = al_center
+        ws.row_dimensions[1].height = 28
+
+        # Дні
+        hdr = ws.cell(row=2, column=1, value='Урок')
+        hdr.font = f_day; hdr.fill = fill_blue; hdr.alignment = al_center; hdr.border = brd_hdr
+        for i in range(D):
+            c = ws.cell(row=2, column=i + 2, value=days_full[i])
+            c.font = f_day; c.fill = fill_blue; c.alignment = al_center; c.border = brd_hdr
+        ws.row_dimensions[2].height = 20
+
+        LINE_H = 26
+        ROW_MIN = 68
+        for p in range(P):
+            row = p + 3
+            pc = ws.cell(row=row, column=1, value=_period_label(p))
+            pc.font = f_period; pc.fill = fill_lblue; pc.alignment = al_center; pc.border = brd
+
+            max_lines = 1
+            for d in range(D):
+                col = d + 2
+                cell_data = grid[d][p]
+                c = ws.cell(row=row, column=col)
+                c.border = brd; c.alignment = al_left
+
+                if cell_data is None:
+                    c.fill = fill_gray
+                elif cell_data['kind'] == 'alt':
+                    parts = []
+                    all_lessons_in_cell = (cell_data['regular']
+                                           + cell_data['week_a']
+                                           + cell_data['week_b'])
+                    base_color = all_lessons_in_cell[0].subject.color if all_lessons_in_cell else None
+                    c.fill = _subject_fill(base_color, alpha=0.18)
+                    # Звичайні (обидва тижні) — без мітки А/Б
+                    for l in cell_data['regular']:
+                        s = l.subject.short_name or l.subject.name
+                        pfx = '\n' if parts else ''
+                        parts += [TextBlock(f_subj, f'{pfx}{s}'),
+                                  TextBlock(f_info, f'\n{l.school_class}'),
+                                  TextBlock(f_dim,  f'\n{l.teacher}')]
+                    # Alt-A
+                    for l in cell_data['week_a']:
+                        s = l.subject.short_name or l.subject.name
+                        pfx = '\n' if parts else ''
+                        parts += [TextBlock(f_alt_a, f'{pfx}А: '),
+                                  TextBlock(f_subj,  s),
+                                  TextBlock(f_info,  f'\n{l.school_class}'),
+                                  TextBlock(f_dim,   f'\n{l.teacher}')]
+                    # Alt-B
+                    for l in cell_data['week_b']:
+                        s = l.subject.short_name or l.subject.name
+                        pfx = '\n' if parts else ''
+                        parts += [TextBlock(f_alt_b, f'{pfx}Б: '),
+                                  TextBlock(f_subj,  s),
+                                  TextBlock(f_info,  f'\n{l.school_class}'),
+                                  TextBlock(f_dim,   f'\n{l.teacher}')]
+                    c.value = CellRichText(*parts) if parts else ''
+                else:
+                    slot_lessons = cell_data['lessons']
+                    c.fill = _subject_fill(slot_lessons[0].subject.color)
+                    c.value = _room_cell_rich(slot_lessons)
+
+                max_lines = max(max_lines, _count_lines(c.value))
+            ws.row_dimensions[row].height = max(max_lines * LINE_H, ROW_MIN)
+
+    # ── Генерація аркушів ────────────────────────────────────────────────────
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+
+    for room in rooms:
+        grid = _build_room_grid(room.pk)
+        safe_name = room.name[:31]
+        ws = wb.create_sheet(title=safe_name)
+        subj_str = ', '.join(s.name for s in room.subjects.all())
+        title = f'Кабінет {room.name}' + (f' ({subj_str})' if subj_str else '') + f'  ·  {schedule.name}'
+        _write_room_sheet(ws, title, grid)
+        ws.freeze_panes = 'B3'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    safe_sched = schedule.name.replace(' ', '_')[:40]
+    resp = HttpResponse(buf, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    resp['Content-Disposition'] = f'attachment; filename="rooms_{safe_sched}.xlsx"'
     return resp

@@ -3,112 +3,169 @@
 {% block title %}{{ schedule.name }}{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center gap-2 mb-3 flex-wrap"
-     style="position:sticky;top:0;z-index:100;background:#f8f9fa;padding:.5rem .25rem;margin:-.5rem -.25rem .75rem;box-shadow:0 2px 6px rgba(0,0,0,.08);">
-  <a href="{% url 'scheduler:schedule_list' %}" class="btn btn-sm btn-outline-secondary">
-    <i class="bi bi-arrow-left"></i>
-  </a>
-  <h4 class="mb-0">{{ schedule.name }}</h4>
-  {% if schedule.is_active %}<span class="badge bg-success">Активний</span>{% endif %}
+{# ── Sticky header ── #}
+<div id="sch-header"
+     style="position:sticky;top:0;z-index:100;background:#f8f9fa;padding:.4rem .25rem .3rem;margin:-.5rem -.25rem 0;box-shadow:0 2px 6px rgba(0,0,0,.08);">
 
-  <button id="edit-toggle" class="btn btn-outline-warning btn-sm">
-    <i class="bi bi-pencil-square me-1"></i>Редагувати
-  </button>
+  {# Row 1: назва + дії #}
+  <div class="d-flex align-items-center gap-2 flex-wrap">
+    <a href="{% url 'scheduler:schedule_list' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-arrow-left"></i>
+    </a>
+    <h5 class="mb-0 me-1">{{ schedule.name }}</h5>
+    {% if schedule.is_active %}<span class="badge bg-success">Активний</span>{% endif %}
 
-  <form method="post" action="{% url 'scheduler:schedule_copy' schedule.pk %}" class="d-inline">
-    {% csrf_token %}
-    <button type="submit" class="btn btn-outline-success btn-sm" title="Зберегти копію розкладу">
-      <i class="bi bi-copy me-1"></i>Копіювати
-    </button>
-  </form>
+    <div class="ms-auto d-flex align-items-center gap-1 flex-wrap">
 
-  <div class="dropdown">
-    <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
-      <i class="bi bi-person-badge me-1"></i>Розклад вчителя
-    </button>
-    <ul class="dropdown-menu dropdown-menu-end" style="max-height:320px;overflow-y:auto;">
-      {% for t in all_teachers %}
-      <li>
-        <a class="dropdown-item" href="{% url 'scheduler:teacher_schedule' schedule.pk t.pk %}">{{ t }}</a>
-      </li>
-      {% endfor %}
-    </ul>
-  </div>
+      {# 1. Генерація — головна дія #}
+      <div class="dropdown">
+        <button class="btn btn-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+          <i class="bi bi-lightning-charge me-1"></i>Генерувати
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li>
+            <form method="post" action="{% url 'scheduler:schedule_generate' schedule.pk %}">
+              {% csrf_token %}<input type="hidden" name="optimize_teachers" value="0">
+              <button type="submit" class="dropdown-item"
+                      onclick="this.disabled=true;this.closest('form').submit();">
+                <i class="bi bi-lightning-charge me-2 text-primary"></i>Швидка генерація
+                <div class="text-muted small ps-4">без оптимізації вікон вчителів</div>
+              </button>
+            </form>
+          </li>
+          <li>
+            <form method="post" action="{% url 'scheduler:schedule_generate' schedule.pk %}">
+              {% csrf_token %}<input type="hidden" name="optimize_teachers" value="1">
+              <button type="submit" class="dropdown-item"
+                      onclick="this.disabled=true;this.closest('form').submit();">
+                <i class="bi bi-stars me-2 text-warning"></i>З оптимізацією вчителів
+                <div class="text-muted small ps-4">мінімізує вікна у розкладі вчителів</div>
+              </button>
+            </form>
+          </li>
+        </ul>
+      </div>
 
-  <a href="{% url 'scheduler:export_schedule' schedule.pk %}"
-     class="btn btn-success btn-sm">
-    <i class="bi bi-file-earmark-excel me-1"></i>Excel
-  </a>
+      {# 2. Кабінети #}
+      <div class="dropdown">
+        <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+          <i class="bi bi-door-open me-1"></i>Кабінети
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li class="px-3 pt-2 pb-1"><span class="text-muted small fw-semibold">Розставити кабінети</span></li>
+          <li>
+            <form method="post" action="{% url 'scheduler:schedule_assign_rooms' schedule.pk %}">
+              {% csrf_token %}<input type="hidden" name="mode" value="specialized">
+              <button type="submit" class="dropdown-item">
+                <i class="bi bi-mortarboard me-2 text-danger"></i>Фізкультура / Інформатика
+                <div class="text-muted small ps-4">спеціалізовані кабінети для всіх класів</div>
+              </button>
+            </form>
+          </li>
+          <li>
+            <form method="post" action="{% url 'scheduler:schedule_assign_rooms' schedule.pk %}">
+              {% csrf_token %}<input type="hidden" name="mode" value="junior">
+              <button type="submit" class="dropdown-item">
+                <i class="bi bi-house me-2 text-success"></i>1–4 класи
+                <div class="text-muted small ps-4">решта предметів у кабінет класу</div>
+              </button>
+            </form>
+          </li>
+          <li>
+            <form method="post" action="{% url 'scheduler:schedule_assign_rooms' schedule.pk %}">
+              {% csrf_token %}<input type="hidden" name="mode" value="senior">
+              <button type="submit" class="dropdown-item">
+                <i class="bi bi-buildings me-2 text-primary"></i>5+ класи
+                <div class="text-muted small ps-4">спеціалізовані → вільні кабінети</div>
+              </button>
+            </form>
+          </li>
+          <li>
+            <form method="post" action="{% url 'scheduler:schedule_assign_rooms' schedule.pk %}">
+              {% csrf_token %}<input type="hidden" name="mode" value="all">
+              <button type="submit" class="dropdown-item">
+                <i class="bi bi-magic me-2 text-secondary"></i>Всі без кабінету
+                <div class="text-muted small ps-4">всі незаповнені уроки одним проходом</div>
+              </button>
+            </form>
+          </li>
+          <li><hr class="dropdown-divider"></li>
+          <li>
+            <form method="post" action="{% url 'scheduler:schedule_reset_rooms' schedule.pk %}"
+                  onsubmit="return confirm('Скинути всі кабінети розкладу?')">
+              {% csrf_token %}
+              <button type="submit" class="dropdown-item text-danger">
+                <i class="bi bi-x-circle me-2"></i>Скинути всі кабінети
+              </button>
+            </form>
+          </li>
+        </ul>
+      </div>
 
-  <div class="dropdown">
-    <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
-      <i class="bi bi-door-open me-1"></i>Кабінети
-    </button>
-    <ul class="dropdown-menu dropdown-menu-end">
-      <li>
-        <form method="post" action="{% url 'scheduler:schedule_assign_rooms' schedule.pk %}">
-          {% csrf_token %}
-          <button type="submit" class="dropdown-item">
-            <i class="bi bi-magic me-2 text-primary"></i>Розставити кабінети
-            <div class="text-muted small ps-4">авто-розкладання по поточних слотах</div>
-          </button>
-        </form>
-      </li>
-      <li><hr class="dropdown-divider"></li>
-      <li>
-        <form method="post" action="{% url 'scheduler:schedule_reset_rooms' schedule.pk %}"
-              onsubmit="return confirm('Скинути всі кабінети розкладу?')">
-          {% csrf_token %}
-          <button type="submit" class="dropdown-item text-danger">
-            <i class="bi bi-x-circle me-2"></i>Скинути всі кабінети
-            <div class="text-muted small ps-4">встановить «без кабінету» для всіх уроків</div>
-          </button>
-        </form>
-      </li>
-    </ul>
-  </div>
+      {# 3. Без кабінету #}
+      <button id="btn-unassigned" class="btn btn-outline-danger btn-sm"
+              type="button" data-bs-toggle="offcanvas" data-bs-target="#unassignedCanvas">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i>
+        <span id="unassigned-count">…</span> без каб.
+      </button>
 
-  <div class="dropdown">
-    <button class="btn btn-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
-      <i class="bi bi-lightning-charge me-1"></i>Згенерувати
-    </button>
-    <ul class="dropdown-menu dropdown-menu-end">
-      <li>
-        <form method="post" action="{% url 'scheduler:schedule_generate' schedule.pk %}">
-          {% csrf_token %}
-          <input type="hidden" name="optimize_teachers" value="0">
-          <button type="submit" class="dropdown-item"
-                  onclick="this.disabled=true; this.closest('form').submit();">
-            <i class="bi bi-lightning-charge me-2 text-primary"></i>Швидка генерація
-            <div class="text-muted small ps-4">без оптимізації вікон вчителів</div>
-          </button>
-        </form>
-      </li>
-      <li>
-        <form method="post" action="{% url 'scheduler:schedule_generate' schedule.pk %}">
-          {% csrf_token %}
-          <input type="hidden" name="optimize_teachers" value="1">
-          <button type="submit" class="dropdown-item"
-                  onclick="this.disabled=true; this.closest('form').submit();">
-            <i class="bi bi-stars me-2 text-warning"></i>З оптимізацією вчителів
-            <div class="text-muted small ps-4">мінімізує вікна у розкладі вчителів</div>
-          </button>
-        </form>
-      </li>
-    </ul>
-  </div>
-</div>
+      {# 4. Редагування #}
+      <button id="edit-toggle" class="btn btn-outline-warning btn-sm">
+        <i class="bi bi-pencil-square me-1"></i>Редагувати
+      </button>
 
-{# Швидка навігація по класах #}
-{% if classes %}
-<div style="position:sticky;top:44px;z-index:99;background:#f8f9fa;padding:.3rem .25rem .4rem;margin:0 -.25rem .75rem;box-shadow:0 2px 4px rgba(0,0,0,.05);">
-  <div class="d-flex flex-wrap gap-1">
+      {# 4. Розклад вчителя #}
+      <div class="dropdown">
+        <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+          <i class="bi bi-person-badge"></i>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end" style="max-height:320px;overflow-y:auto;">
+          <li class="px-3 pt-2 pb-1"><span class="text-muted small fw-semibold">Розклад вчителя</span></li>
+          {% for t in all_teachers %}
+          <li><a class="dropdown-item" href="{% url 'scheduler:teacher_schedule' schedule.pk t.pk %}">{{ t }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      {# 5. Копіювати #}
+      <form method="post" action="{% url 'scheduler:schedule_copy' schedule.pk %}" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-secondary btn-sm" title="Зберегти копію розкладу">
+          <i class="bi bi-copy"></i>
+        </button>
+      </form>
+
+      {# 6. Excel #}
+      <div class="dropdown">
+        <button class="btn btn-success btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+          <i class="bi bi-file-earmark-excel me-1"></i>Excel
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><a class="dropdown-item" href="{% url 'scheduler:export_schedule' schedule.pk %}">
+            <i class="bi bi-table me-2"></i>Розклад по класах
+          </a></li>
+          <li><a class="dropdown-item" href="{% url 'scheduler:export_rooms' schedule.pk %}">
+            <i class="bi bi-door-open me-2"></i>Розклад кабінетів
+          </a></li>
+        </ul>
+      </div>
+
+    </div>{# /ms-auto #}
+  </div>{# /row1 #}
+
+  {# Row 2: навігація по класах (завжди видима, закріплена разом з шапкою) #}
+  {% if classes %}
+  <div class="d-flex flex-wrap gap-1 mt-2 pt-1" style="border-top:1px solid #dee2e6;">
     {% for cls in classes %}
-    <a href="#cls-{{ cls.pk }}" class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size:.8rem;">{{ cls }}</a>
+    <a href="#cls-{{ cls.pk }}"
+       class="btn btn-sm btn-outline-secondary py-0 px-2"
+       style="font-size:.78rem;">{{ cls }}</a>
     {% endfor %}
   </div>
-</div>
-{% endif %}
+  {% endif %}
+
+</div>{# /sch-header #}
+<div class="mb-3"></div>
 
 {# Підказка в режимі редагування #}
 <div id="edit-hint" class="alert alert-warning py-2 d-none">
@@ -182,7 +239,7 @@
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_a.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.week_a.teacher }}</a>
               </div>
-              {% if cell.week_a.room %}<div class="text-muted room-label" style="font-size:.7rem;">каб. {{ cell.week_a.room }}</div>
+              {% if cell.week_a.room %}<div class="text-muted room-label" style="font-size:.7rem;"><a href="{% url 'scheduler:room_schedule' schedule.pk cell.week_a.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.week_a.room }}</a></div>
               {% else %}<div class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
             </div>
             {% endif %}
@@ -207,7 +264,7 @@
                 <a href="{% url 'scheduler:teacher_schedule' schedule.pk cell.week_b.teacher_id %}"
                    class="text-muted text-decoration-none">{{ cell.week_b.teacher }}</a>
               </div>
-              {% if cell.week_b.room %}<div class="text-muted room-label" style="font-size:.7rem;">каб. {{ cell.week_b.room }}</div>
+              {% if cell.week_b.room %}<div class="text-muted room-label" style="font-size:.7rem;"><a href="{% url 'scheduler:room_schedule' schedule.pk cell.week_b.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.week_b.room }}</a></div>
               {% else %}<div class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</div>{% endif %}
             </div>
             {% endif %}
@@ -235,7 +292,7 @@
                 </div>
                 <div class="d-flex align-items-center gap-1">
                   {% if lesson.room %}
-                    <span class="text-muted room-label" style="font-size:.72rem;">каб. {{ lesson.room }}</span>
+                    <span class="text-muted room-label" style="font-size:.72rem;"><a href="{% url 'scheduler:room_schedule' schedule.pk lesson.room_id %}" class="text-muted text-decoration-none">каб. {{ lesson.room }}</a></span>
                   {% else %}
                     <span class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;">
                       <i class="bi bi-exclamation-triangle-fill"></i> без кабінету
@@ -267,7 +324,7 @@
                    class="text-muted text-decoration-none">{{ cell.extra.teacher }}</a>
                 <div class="d-flex align-items-center gap-1">
                   {% if cell.extra.room %}
-                    <span class="text-muted room-label" style="font-size:.7rem;">каб. {{ cell.extra.room }}</span>
+                    <span class="text-muted room-label" style="font-size:.7rem;"><a href="{% url 'scheduler:room_schedule' schedule.pk cell.extra.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.extra.room }}</a></span>
                   {% else %}
                     <span class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;"><i class="bi bi-exclamation-triangle-fill"></i> без кабінету</span>
                   {% endif %}
@@ -298,6 +355,17 @@
 {% endblock %}
 
 {% block extra_js %}
+{# ── Offcanvas: уроки без кабінету ── #}
+<div class="offcanvas offcanvas-end" tabindex="-1" id="unassignedCanvas" style="width:360px;max-width:100vw;">
+  <div class="offcanvas-header py-2 px-3">
+    <h6 class="offcanvas-title mb-0"><i class="bi bi-exclamation-triangle-fill text-danger me-2"></i>Без кабінету</h6>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+  </div>
+  <div class="offcanvas-body p-0" id="unassigned-body">
+    <div class="text-center p-4 text-muted small">Завантаження…</div>
+  </div>
+</div>
+
 {# ── Модалка вибору кабінету ── #}
 <div class="modal fade" id="roomModal" tabindex="-1">
   <div class="modal-dialog modal-sm modal-dialog-centered">
@@ -492,10 +560,11 @@
   });
 
   // ── Вибір кабінету ───────────────────────────────────────────────────────
-  const ROOM_URL   = "{% url 'scheduler:lesson_set_room' schedule.pk %}";
-  const roomModal  = new bootstrap.Modal(document.getElementById('roomModal'));
-  const roomBody   = document.getElementById('room-modal-body');
-  let   roomLid    = null;
+  const ROOM_URL      = "{% url 'scheduler:lesson_set_room' schedule.pk %}";
+  const ROOM_SCH_URL  = (id) => "{% url 'scheduler:room_schedule' schedule.pk 99999 %}".replace('99999', id);
+  const roomModal     = new bootstrap.Modal(document.getElementById('roomModal'));
+  const roomBody      = document.getElementById('room-modal-body');
+  let   roomLid       = null;
 
   document.querySelectorAll('.btn-room-edit').forEach(btn => {
     btn.addEventListener('click', function () {
@@ -535,13 +604,13 @@
     roomBody.innerHTML = html;
   }
 
-  function updateRoomLabel(container, roomName) {
+  function updateRoomLabel(container, roomName, roomId) {
     const lbl = container.querySelector('.room-label');
     if (!lbl) return;
-    if (roomName) {
+    if (roomName && roomId) {
       lbl.className = 'text-muted room-label';
       lbl.style.cssText = 'font-size:.7rem;';
-      lbl.innerHTML = `каб. ${roomName}`;
+      lbl.innerHTML = `<a href="${ROOM_SCH_URL(roomId)}" class="text-muted text-decoration-none">каб. ${roomName}</a>`;
     } else {
       lbl.className = 'room-label';
       lbl.style.cssText = 'font-size:.7rem;color:#dc3545;font-weight:600;';
@@ -564,12 +633,12 @@
           `.sch-lesson[data-lid="${roomLid}"], .sch-alt-lesson[data-lid="${roomLid}"]`
         );
         if (container) {
-          updateRoomLabel(container, data.room_name);
+          updateRoomLabel(container, data.room_name, data.room_id);
           // Alt-уроки: сусідній тиждень у тій самій td теж отримав той самий кабінет
           const td = container.closest('td');
           if (td) {
             td.querySelectorAll('.sch-alt-lesson').forEach(el => {
-              if (el !== container) updateRoomLabel(el, data.room_name);
+              if (el !== container) updateRoomLabel(el, data.room_name, data.room_id);
             });
           }
         }
@@ -580,6 +649,115 @@
     })
     .catch(() => { showError('Помилка зʼєднання'); roomModal.hide(); });
   };
+  // ── Панель "Без кабінету" ────────────────────────────────────────────────
+  const UNASSIGNED_URL       = "{% url 'scheduler:schedule_unassigned' schedule.pk %}";
+  const UNASSIGNED_COUNT_URL = "{% url 'scheduler:schedule_unassigned_count' schedule.pk %}";
+  const unassignedBody = document.getElementById('unassigned-body');
+  const btnUnassigned  = document.getElementById('btn-unassigned');
+  const cntBadge       = document.getElementById('unassigned-count');
+
+  // Завантаження при відкритті offcanvas
+  document.getElementById('unassignedCanvas').addEventListener('show.bs.offcanvas', loadUnassigned);
+
+  function loadUnassigned() {
+    unassignedBody.innerHTML = '<div class="text-center p-4 text-muted small">Завантаження…</div>';
+    fetch(UNASSIGNED_URL)
+      .then(r => r.json())
+      .then(data => renderUnassigned(data.items))
+      .catch(() => { unassignedBody.innerHTML = '<div class="p-3 text-danger small">Помилка</div>'; });
+  }
+
+  function renderUnassigned(items) {
+    if (items.length === 0) {
+      unassignedBody.innerHTML = '<div class="p-4 text-center text-success"><i class="bi bi-check-circle-fill fs-3"></i><div class="mt-2 small">Всі уроки мають кабінет</div></div>';
+      btnUnassigned.classList.add('d-none');
+      return;
+    }
+
+    // Групуємо по дню
+    const byDay = {};
+    items.forEach(it => {
+      const k = it.day_name;
+      if (!byDay[k]) byDay[k] = [];
+      byDay[k].push(it);
+    });
+
+    let html = '';
+    for (const [dayName, dayItems] of Object.entries(byDay)) {
+      html += `<div class="px-3 pt-2 pb-1 border-bottom">
+        <span class="fw-semibold text-muted" style="font-size:.78rem;">${dayName}</span>
+      </div>`;
+      dayItems.forEach(it => {
+        const groupBadge = it.group ? `<span class="badge text-bg-secondary me-1" style="font-size:.58rem;">гр.${it.group}</span>` : '';
+        const roomsHtml = it.free_rooms.length > 0
+          ? it.free_rooms.map(r =>
+              `<button class="btn btn-sm btn-outline-secondary py-0 px-1 me-1 mb-1"
+                       style="font-size:.7rem;"
+                       onclick="assignUnassigned(${it.lid}, ${r.id}, this)">${r.name}</button>`
+            ).join('')
+          : `<span class="text-danger" style="font-size:.7rem;"><i class="bi bi-x-circle me-1"></i>Немає вільних</span>`;
+
+        html += `
+          <div class="px-3 py-2 border-bottom unassigned-item" id="uitem-${it.lid}"
+               style="border-left:3px solid ${it.color}!important;background:${it.color}0d;">
+            <div class="d-flex align-items-baseline gap-1 mb-1">
+              <span class="fw-semibold" style="font-size:.82rem;">${groupBadge}${it.subject}</span>
+              <span class="text-muted" style="font-size:.75rem;">${it.class}</span>
+              <span class="badge bg-light text-dark border ms-auto" style="font-size:.65rem;">ур.${it.period}</span>
+            </div>
+            <div class="text-muted mb-1" style="font-size:.72rem;">${it.teacher}</div>
+            <div class="d-flex flex-wrap align-items-center">${roomsHtml}</div>
+          </div>`;
+      });
+    }
+    unassignedBody.innerHTML = html;
+  }
+
+  window.assignUnassigned = function(lid, roomId, btn) {
+    btn.disabled = true;
+    fetch(ROOM_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+      body: JSON.stringify({lesson_id: lid, room_id: roomId}),
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        // Прибираємо цей рядок з панелі
+        const item = document.getElementById(`uitem-${lid}`);
+        if (item) item.remove();
+        const remaining = unassignedBody.querySelectorAll('.unassigned-item').length;
+        cntBadge.textContent = remaining;
+        if (remaining === 0) {
+          unassignedBody.innerHTML = '<div class="p-4 text-center text-success"><i class="bi bi-check-circle-fill fs-3"></i><div class="mt-2 small">Всі уроки мають кабінет</div></div>';
+          btnUnassigned.classList.remove('btn-outline-danger');
+          btnUnassigned.classList.add('btn-outline-success');
+          btnUnassigned.querySelector('i').className = 'bi bi-check-circle me-1';
+        }
+        // Оновлюємо лейбл у таблиці без перезавантаження
+        const container = document.querySelector(`.sch-lesson[data-lid="${lid}"], .sch-alt-lesson[data-lid="${lid}"]`);
+        if (container) updateRoomLabel(container, data.room_name, data.room_id);
+      } else {
+        btn.disabled = false;
+        showError(data.error || 'Помилка');
+      }
+    })
+    .catch(() => { btn.disabled = false; showError('Помилка зʼєднання'); });
+  };
+
+  // Ініціалізація: легкий запит тільки для лічильника (без даних кімнат)
+  fetch(UNASSIGNED_COUNT_URL)
+    .then(r => r.json())
+    .then(data => {
+      cntBadge.textContent = data.count;
+      if (data.count === 0) {
+        btnUnassigned.classList.remove('btn-outline-danger');
+        btnUnassigned.classList.add('btn-outline-success');
+        btnUnassigned.querySelector('i').className = 'bi bi-check-circle me-1';
+      }
+    })
+    .catch(() => { cntBadge.textContent = '?'; });
+
 })();
 </script>
 {% endblock %}

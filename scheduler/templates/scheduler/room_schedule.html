@@ -51,7 +51,10 @@
     </ul>
   </div>
 
-  <small class="text-muted ms-1"><i class="bi bi-info-circle me-1"></i>Клікніть на порожній слот, щоб призначити кабінет</small>
+  <button class="btn btn-sm btn-outline-success ms-auto" data-bs-toggle="modal" data-bs-target="#teacherAssignModal">
+    <i class="bi bi-person-check me-1"></i>Призначити вчителя
+  </button>
+  <small class="text-muted"><i class="bi bi-info-circle me-1"></i>Клікніть на порожній слот, щоб призначити кабінет</small>
 </div>
 
 <div class="table-card" style="overflow-x:auto;">
@@ -157,6 +160,35 @@
   </table>
 </div>
 
+{# ── Модалка призначення вчителя ── #}
+<div class="modal fade" id="teacherAssignModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2 px-3">
+        <h6 class="modal-title mb-0"><i class="bi bi-person-check me-1"></i>Призначити вчителя в кабінет</h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body px-3 py-3">
+        <label class="form-label small fw-semibold mb-1">Вчитель</label>
+        <select id="teacherSelect" class="form-select form-select-sm mb-3">
+          <option value="">— оберіть вчителя —</option>
+          {% for t in all_teachers %}
+          <option value="{{ t.pk }}">{{ t }}</option>
+          {% endfor %}
+        </select>
+        <div class="text-muted small mb-3">Всі уроки обраного вчителя будуть призначені до кабінету <strong>{{ room.name }}</strong>.</div>
+        <div id="teacherAssignMsg" class="small mb-2 d-none"></div>
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-success btn-sm flex-fill" onclick="doAssignTeacher()">
+            <i class="bi bi-check-lg me-1"></i>Призначити
+          </button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Скасувати</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 {# ── Модалка слоту ── #}
 <div class="modal fade" id="slotModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered" style="max-width:480px;">
@@ -192,7 +224,7 @@
       slotTitle.textContent = `Урок ${period}`;
       slotBody.innerHTML = '<div class="text-center p-4 text-muted small">Завантаження…</div>';
       slotModal.show();
-      fetch(`${SLOT_URL}?day=${day}&period=${this.dataset.period}`)
+      fetch(`${SLOT_URL}?day=${day}&period=${this.dataset.period}&room_id=${ROOM_ID}`)
         .then(r => r.json())
         .then(data => renderSlot(data, day, this.dataset.period))
         .catch(() => { slotBody.innerHTML = '<div class="p-3 text-danger small">Помилка</div>'; });
@@ -225,22 +257,42 @@
   }
 
   function renderSlot(data, day, period) {
-    let html = '';
     if (data.no_room.length === 0 && data.with_room.length === 0) {
       slotBody.innerHTML = '<div class="p-4 text-center text-muted small">У цей час уроків немає</div>';
       return;
     }
-    if (data.no_room.length > 0) {
-      html += `<div class="px-3 pt-2 pb-1"><span class="badge bg-danger" style="font-size:.7rem;">Без кабінету</span></div>`;
-      data.no_room.forEach(l => { html += lessonCard(l, true); });
+
+    const noMatch  = data.no_room.filter(l => !l.match);
+    const noRoomMatch = data.no_room.filter(l => l.match);
+    const withMatch   = data.with_room.filter(l => l.match);
+    const withOther   = data.with_room.filter(l => !l.match);
+
+    let html = '';
+    let needDivider = false;
+
+    if (noRoomMatch.length > 0) {
+      html += `<div class="px-3 pt-2 pb-1"><span class="badge bg-danger" style="font-size:.7rem;">Профільні · без кабінету</span></div>`;
+      noRoomMatch.forEach(l => { html += lessonCard(l, true); });
+      needDivider = true;
     }
-    if (data.with_room.length > 0) {
-      html += `<div class="px-3 pt-2 pb-1 ${data.no_room.length ? 'mt-1 border-top' : ''}">
-        <span class="badge bg-secondary" style="font-size:.7rem;">Вже у кабінеті</span></div>`;
-      data.with_room.forEach(l => {
+    if (noMatch.length > 0) {
+      html += `<div class="px-3 pt-2 pb-1 ${needDivider ? 'mt-1 border-top' : ''}"><span class="badge bg-warning text-dark" style="font-size:.7rem;">Без кабінету</span></div>`;
+      noMatch.forEach(l => { html += lessonCard(l, true); });
+      needDivider = true;
+    }
+    if (withMatch.length > 0) {
+      html += `<div class="px-3 pt-2 pb-1 mt-1 border-top"><span class="badge bg-secondary" style="font-size:.7rem;">Профільні · вже у кабінеті</span></div>`;
+      withMatch.forEach(l => {
         html += lessonCard(l, true);
-        html += `<div class="px-3 pb-1" style="font-size:.7rem;color:#6c757d;">
-          <i class="bi bi-door-open me-1"></i>${l.room}</div>`;
+        html += `<div class="px-3 pb-1" style="font-size:.7rem;color:#6c757d;"><i class="bi bi-door-open me-1"></i>${l.room}</div>`;
+      });
+      needDivider = true;
+    }
+    if (withOther.length > 0) {
+      html += `<div class="px-3 pt-2 pb-1 mt-1 border-top"><span class="badge bg-secondary" style="font-size:.7rem;">Вже у кабінеті</span></div>`;
+      withOther.forEach(l => {
+        html += lessonCard(l, true);
+        html += `<div class="px-3 pb-1" style="font-size:.7rem;color:#6c757d;"><i class="bi bi-door-open me-1"></i>${l.room}</div>`;
       });
     }
     slotBody.innerHTML = html;
@@ -272,6 +324,39 @@
       else alert(data.error || 'Помилка');
     })
     .catch(() => alert('Помилка зʼєднання'));
+  };
+
+  const ASSIGN_TEACHER_URL = "{% url 'scheduler:assign_teacher_room' schedule.pk %}";
+  window.doAssignTeacher = function () {
+    const teacherId = document.getElementById('teacherSelect').value;
+    const msgEl = document.getElementById('teacherAssignMsg');
+    if (!teacherId) {
+      msgEl.textContent = 'Оберіть вчителя';
+      msgEl.className = 'small mb-2 text-danger';
+      return;
+    }
+    msgEl.textContent = 'Збереження…';
+    msgEl.className = 'small mb-2 text-muted d-block';
+    fetch(ASSIGN_TEACHER_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+      body: JSON.stringify({teacher_id: parseInt(teacherId), room_id: ROOM_ID}),
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        msgEl.textContent = `✓ ${data.teacher}: призначено ${data.count} уроків`;
+        msgEl.className = 'small mb-2 text-success d-block';
+        setTimeout(() => location.reload(), 900);
+      } else {
+        msgEl.textContent = data.error || 'Помилка';
+        msgEl.className = 'small mb-2 text-danger d-block';
+      }
+    })
+    .catch(() => {
+      msgEl.textContent = 'Помилка зʼєднання';
+      msgEl.className = 'small mb-2 text-danger d-block';
+    });
   };
 })();
 </script>

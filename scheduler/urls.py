@@ -62,9 +62,13 @@ urlpatterns = [
     path('schedules/<int:pk>/lesson-sibling/', views.lesson_sibling, name='lesson_sibling'),
     path('schedules/<int:pk>/toggle-week/', views.lesson_toggle_week, name='lesson_toggle_week'),
     path('schedules/<int:pk>/slot-lessons/', views.slot_lessons, name='slot_lessons'),
+    path('schedules/<int:pk>/assign-teacher-room/', views.assign_teacher_to_room, name='assign_teacher_room'),
+    path('schedules/<int:pk>/unassigned/', views.schedule_unassigned, name='schedule_unassigned'),
+    path('schedules/<int:pk>/unassigned-count/', views.schedule_unassigned_count, name='schedule_unassigned_count'),
 
     # Exports
     path('export/teacher-load/', views.export_teacher_load, name='export_teacher_load'),
     path('export/class-load/', views.export_class_load, name='export_class_load'),
     path('schedules/<int:pk>/export/', views.export_schedule, name='export_schedule'),
+    path('schedules/<int:pk>/export-rooms/', views.export_rooms, name='export_rooms'),
 ]
