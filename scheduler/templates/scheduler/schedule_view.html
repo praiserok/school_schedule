@@ -663,7 +663,21 @@
     unassignedBody.innerHTML = '<div class="text-center p-4 text-muted small">Завантаження…</div>';
     fetch(UNASSIGNED_URL)
       .then(r => r.json())
-      .then(data => renderUnassigned(data.items))
+      .then(data => {
+        renderUnassigned(data.items);
+        // Синхронізуємо бейдж з реальною кількістю після кожного оновлення
+        const n = data.items.length;
+        cntBadge.textContent = n;
+        if (n === 0) {
+          btnUnassigned.classList.remove('btn-outline-danger');
+          btnUnassigned.classList.add('btn-outline-success');
+          btnUnassigned.querySelector('i').className = 'bi bi-check-circle me-1';
+        } else {
+          btnUnassigned.classList.remove('btn-outline-success');
+          btnUnassigned.classList.add('btn-outline-danger');
+          btnUnassigned.querySelector('i').className = 'bi bi-exclamation-triangle-fill me-1';
+        }
+      })
       .catch(() => { unassignedBody.innerHTML = '<div class="p-3 text-danger small">Помилка</div>'; });
   }
 
@@ -723,20 +737,12 @@
     .then(r => r.json())
     .then(data => {
       if (data.ok) {
-        // Прибираємо цей рядок з панелі
-        const item = document.getElementById(`uitem-${lid}`);
-        if (item) item.remove();
-        const remaining = unassignedBody.querySelectorAll('.unassigned-item').length;
-        cntBadge.textContent = remaining;
-        if (remaining === 0) {
-          unassignedBody.innerHTML = '<div class="p-4 text-center text-success"><i class="bi bi-check-circle-fill fs-3"></i><div class="mt-2 small">Всі уроки мають кабінет</div></div>';
-          btnUnassigned.classList.remove('btn-outline-danger');
-          btnUnassigned.classList.add('btn-outline-success');
-          btnUnassigned.querySelector('i').className = 'bi bi-check-circle me-1';
-        }
         // Оновлюємо лейбл у таблиці без перезавантаження
         const container = document.querySelector(`.sch-lesson[data-lid="${lid}"], .sch-alt-lesson[data-lid="${lid}"]`);
         if (container) updateRoomLabel(container, data.room_name, data.room_id);
+        // Перезавантажуємо панель з сервера — щоб в інших уроках того ж слоту
+        // цей кабінет зник зі списку вільних
+        loadUnassigned();
       } else {
         btn.disabled = false;
         showError(data.error || 'Помилка');

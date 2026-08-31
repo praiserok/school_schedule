@@ -1016,28 +1016,15 @@ def schedule_unassigned(request, pk):
                 .annotate(cnt=Count('pk'))):
         occupancy[(row['day'], row['period'], row['week'])][row['room_id']] = row['cnt']
 
-    rooms = list(Room.objects.prefetch_related('subjects').order_by('name'))
-    room_subject_ids = {r.pk: frozenset(s.pk for s in r.subjects.all()) for r in rooms}
-
-    # Індекс для швидкого пошуку: спеціалізовані кімнати по предмету + загальні
-    rooms_by_subject: dict = defaultdict(list)
-    general_rooms: list = []
-    for r in rooms:
-        if room_subject_ids[r.pk]:
-            for sid in room_subject_ids[r.pk]:
-                rooms_by_subject[sid].append(r)
-        else:
-            general_rooms.append(r)
+    rooms = list(Room.objects.only('pk', 'name', 'max_simultaneous').order_by('name'))
 
     items = []
     for (day, period, cls_id, subj_id, group), ls in families.items():
         rep = ls[0]
         missing_weeks = {l.week for l in ls}
 
-        # Профільні кімнати для предмету + загальні кімнати без профілю
-        candidate_rooms = rooms_by_subject.get(subj_id, []) + general_rooms
         free_rooms = []
-        for r in candidate_rooms:
+        for r in rooms:
             if all(occupancy[(day, period, w)].get(r.pk, 0) < r.max_simultaneous
                    for w in missing_weeks):
                 free_rooms.append({'id': r.pk, 'name': r.name})

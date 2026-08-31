@@ -16,6 +16,12 @@ DEBUG = os.environ.get('DEBUG', 'true').lower() == 'true'
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',') if os.environ.get('ALLOWED_HOSTS') else ['*']
 
+_app_host = os.environ.get('FLY_APP_NAME', '')
+CSRF_TRUSTED_ORIGINS = [
+    'https://*.fly.dev',
+    *([ f'https://{_app_host}.fly.dev' ] if _app_host else []),
+]
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
