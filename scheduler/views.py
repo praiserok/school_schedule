@@ -506,7 +506,7 @@ def bell_delete(request, pk):
 
 def schedule_list(request):
     return render(request, 'scheduler/schedule_list.html', {
-        'schedules': Schedule.objects.all(),
+        'schedules': Schedule.objects.order_by('-is_active', '-pk'),
     })
 
 
