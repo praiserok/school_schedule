@@ -147,6 +147,9 @@
           <li><a class="dropdown-item" href="{% url 'scheduler:export_rooms' schedule.pk %}">
             <i class="bi bi-door-open me-2"></i>Розклад кабінетів
           </a></li>
+          <li><a class="dropdown-item" href="{% url 'scheduler:export_teacher_timetable' schedule.pk %}">
+            <i class="bi bi-person-lines-fill me-2"></i>Зведений розклад вчителів
+          </a></li>
         </ul>
       </div>
 

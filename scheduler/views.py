@@ -2569,3 +2569,159 @@ def export_rooms(request, pk):
     resp = HttpResponse(buf, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     resp['Content-Disposition'] = f'attachment; filename="rooms_{safe_sched}.xlsx"'
     return resp
+
+
+def export_teacher_timetable(request, pk):
+    """XLSX: зведена таблиця вчителів — рядки=вчителі, колонки=день×урок, в клітинці клас+кабінет."""
+    import io
+    from django.http import HttpResponse
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    schedule = get_object_or_404(Schedule, pk=pk)
+    D = schedule.days_per_week
+    P = schedule.lessons_per_day
+
+    lessons = list(schedule.lessons
+                   .select_related('teacher', 'school_class', 'room')
+                   .order_by('teacher__last_name', 'teacher__first_name', 'day', 'period', 'week'))
+
+    # Збираємо вчителів що мають уроки
+    teacher_ids_ordered = []
+    seen = set()
+    for l in lessons:
+        if l.teacher_id not in seen:
+            seen.add(l.teacher_id)
+            teacher_ids_ordered.append(l.teacher_id)
+    teachers_map = {t.pk: t for t in Teacher.objects.filter(pk__in=teacher_ids_ordered)}
+    teachers = [teachers_map[tid] for tid in teacher_ids_ordered if tid in teachers_map]
+
+    # grid[teacher_pk][d][p] → список уроків (тижень А і Б можуть бути обидва)
+    grid = {t.pk: {d: {p: [] for p in range(P)} for d in range(D)} for t in teachers}
+    for l in lessons:
+        if l.teacher_id in grid and l.day < D and l.period < P:
+            grid[l.teacher_id][l.day][l.period].append(l)
+
+    def cell_text(lesson_list):
+        """Повертає plain text: клас на першому рядку, 'каб. X' на другому."""
+        if not lesson_list:
+            return ''
+
+        def fmt(l, prefix=''):
+            lines = [f'{prefix}{l.school_class}']
+            if l.room:
+                lines.append(f'каб. {l.room}')
+            return '\n'.join(lines)
+
+        week_a = [l for l in lesson_list if l.week == 0]
+        week_b = [l for l in lesson_list if l.week == 1]
+
+        if week_a and week_b:
+            if (week_a[0].school_class_id == week_b[0].school_class_id
+                    and week_a[0].subject_id == week_b[0].subject_id):
+                return fmt(week_a[0])
+            return fmt(week_a[0], 'А: ') + '\n' + fmt(week_b[0], 'Б: ')
+
+        return fmt((week_a or week_b)[0])
+
+    # ── Стилі ──────────────────────────────────────────────────────────────────
+    DAYS_UK = DAYS_FULL[:D]
+
+    hdr_day_fill  = PatternFill('solid', fgColor='1F3864')
+    hdr_per_fill  = PatternFill('solid', fgColor='2E5BA8')
+    teacher_fill  = PatternFill('solid', fgColor='F2F2F2')
+    border_thin   = Border(
+        left=Side(style='thin', color='CCCCCC'),
+        right=Side(style='thin', color='CCCCCC'),
+        top=Side(style='thin', color='CCCCCC'),
+        bottom=Side(style='thin', color='CCCCCC'),
+    )
+    align_center  = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    align_left    = Alignment(horizontal='left',   vertical='center', wrap_text=True)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Розклад вчителів'
+
+    # ── Рядок 1: назва розкладу ────────────────────────────────────────────────
+    total_cols = 1 + D * P
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+    title_cell = ws.cell(row=1, column=1, value=f'Розклад вчителів  ·  {schedule.name}')
+    title_cell.font = Font(bold=True, size=13, color='FFFFFF')
+    title_cell.fill = PatternFill('solid', fgColor='1F3864')
+    title_cell.alignment = align_center
+
+    # ── Рядок 2: дні (мердж по P колонок кожен) + заголовок «Вчитель» ─────────
+    ws.cell(row=2, column=1, value='Вчитель').font = Font(bold=True, color='FFFFFF')
+    ws.cell(row=2, column=1).fill = hdr_day_fill
+    ws.cell(row=2, column=1).alignment = align_center
+    ws.cell(row=2, column=1).border = border_thin
+
+    for d in range(D):
+        col_start = 2 + d * P
+        col_end   = col_start + P - 1
+        if P > 1:
+            ws.merge_cells(start_row=2, start_column=col_start, end_row=2, end_column=col_end)
+        c = ws.cell(row=2, column=col_start, value=DAYS_UK[d])
+        c.font      = Font(bold=True, color='FFFFFF')
+        c.fill      = hdr_day_fill
+        c.alignment = align_center
+        c.border    = border_thin
+
+    # ── Рядок 3: номери уроків ─────────────────────────────────────────────────
+    ws.cell(row=3, column=1, value='').border = border_thin
+    ws.cell(row=3, column=1).fill = hdr_per_fill
+    for d in range(D):
+        for p in range(P):
+            col = 2 + d * P + p
+            c = ws.cell(row=3, column=col, value=p + 1)
+            c.font      = Font(bold=True, color='FFFFFF')
+            c.fill      = hdr_per_fill
+            c.alignment = align_center
+            c.border    = border_thin
+
+    # ── Дані: рядок на вчителя ────────────────────────────────────────────────
+    for row_idx, teacher in enumerate(teachers):
+        row = 4 + row_idx
+        # Чергуємо фон рядків
+        row_fill = PatternFill('solid', fgColor='F2F2F2') if row_idx % 2 == 0 else PatternFill('solid', fgColor='FFFFFF')
+
+        c = ws.cell(row=row, column=1, value=str(teacher))
+        c.font      = Font(bold=True)
+        c.fill      = teacher_fill
+        c.alignment = align_left
+        c.border    = border_thin
+
+        for d in range(D):
+            for p in range(P):
+                col  = 2 + d * P + p
+                text = cell_text(grid[teacher.pk][d][p])
+                c = ws.cell(row=row, column=col, value=text)
+                c.fill      = row_fill
+                c.alignment = align_center
+                c.border    = border_thin
+
+    # ── Ширини колонок ─────────────────────────────────────────────────────────
+    ws.column_dimensions['A'].width = 22
+    for d in range(D):
+        for p in range(P):
+            col_letter = get_column_letter(2 + d * P + p)
+            ws.column_dimensions[col_letter].width = 13
+
+    # ── Висоти рядків ─────────────────────────────────────────────────────────
+    ws.row_dimensions[1].height = 22
+    ws.row_dimensions[2].height = 18
+    ws.row_dimensions[3].height = 16
+    for row_idx in range(len(teachers)):
+        ws.row_dimensions[4 + row_idx].height = 32
+
+    ws.freeze_panes = 'B4'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    safe = schedule.name.replace(' ', '_')[:40]
+    resp = HttpResponse(buf, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    resp['Content-Disposition'] = f'attachment; filename="teacher_timetable_{safe}.xlsx"'
+    return resp
