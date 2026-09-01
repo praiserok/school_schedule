@@ -81,4 +81,5 @@ urlpatterns = [
     path('schedules/<int:pk>/export/', views.export_schedule, name='export_schedule'),
     path('schedules/<int:pk>/export-rooms/', views.export_rooms, name='export_rooms'),
     path('schedules/<int:pk>/export-teacher-timetable/', views.export_teacher_timetable, name='export_teacher_timetable'),
+    path('schedules/<int:pk>/export-class-timetable/', views.export_class_timetable, name='export_class_timetable'),
 ]
