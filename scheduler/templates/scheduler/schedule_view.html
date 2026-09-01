@@ -43,6 +43,13 @@
               </button>
             </form>
           </li>
+          <li><hr class="dropdown-divider"></li>
+          <li>
+            <a href="{% url 'scheduler:sync_schedule_teachers' schedule.pk %}" class="dropdown-item">
+              <i class="bi bi-arrow-repeat me-2 text-secondary"></i>Оновити вчителів
+              <div class="text-muted small ps-4">синхронізувати з поточними призначеннями</div>
+            </a>
+          </li>
         </ul>
       </div>
 

@@ -1275,6 +1275,101 @@ def schedule_view(request, pk):
     })
 
 
+# ─── Оновлення вчителів у розкладі ──────────────────────────────────────────
+
+def sync_schedule_teachers(request, pk):
+    """
+    GET  — показує які уроки змінять вчителя (порівняння з поточними TeacherSubject).
+    POST — застосовує зміни одним SQL CASE-запитом (атомарно, без конфліктів).
+    """
+    from django.db import transaction
+
+    schedule = get_object_or_404(Schedule, pk=pk)
+
+    # Словник: (school_class_id, subject_id, group) → teacher
+    ts_map = {
+        (ts.school_class_id, ts.subject_id, ts.group): ts.teacher
+        for ts in TeacherSubject.objects.select_related('teacher')
+    }
+
+    # Знаходимо уроки з розбіжністю
+    lessons = list(
+        schedule.lessons.select_related('school_class', 'subject', 'teacher')
+    )
+    changes = []  # [{lesson, old_teacher, new_teacher}]
+    for lesson in lessons:
+        key = (lesson.school_class_id, lesson.subject_id, lesson.group)
+        new_teacher = ts_map.get(key)
+        if new_teacher and new_teacher.pk != lesson.teacher_id:
+            changes.append({
+                'lesson':      lesson,
+                'old_teacher': lesson.teacher,
+                'new_teacher': new_teacher,
+            })
+
+    if request.method == 'POST' and changes:
+        with transaction.atomic():
+            # Конфліктні зміни: новий вчитель вже зайнятий в тому ж слоті в БД
+            conflict_ids = set()
+            for c in changes:
+                occupied = Lesson.objects.filter(
+                    schedule_id=schedule.pk,
+                    teacher_id=c['new_teacher'].pk,
+                    day=c['lesson'].day,
+                    period=c['lesson'].period,
+                    week=c['lesson'].week,
+                ).exclude(pk=c['lesson'].pk).exists()
+                if occupied:
+                    conflict_ids.add(c['lesson'].pk)
+
+            # Додатково: якщо два «безпечних» оновлення ведуть одного вчителя
+            # в один слот — між собою вони теж конфліктують (один витіснить другий).
+            from collections import defaultdict
+            slot_map = defaultdict(list)
+            for c in changes:
+                if c['lesson'].pk not in conflict_ids:
+                    slot = (c['new_teacher'].pk, c['lesson'].day, c['lesson'].period, c['lesson'].week)
+                    slot_map[slot].append(c['lesson'].pk)
+            for pks in slot_map.values():
+                if len(pks) > 1:
+                    conflict_ids.update(pks)
+
+            safe        = [c for c in changes if c['lesson'].pk not in conflict_ids]
+            conflicting = [c for c in changes if c['lesson'].pk in conflict_ids]
+
+            # Безпечні — прості update (кожен новий вчитель унікальний у слоті)
+            for c in safe:
+                Lesson.objects.filter(pk=c['lesson'].pk).update(teacher_id=c['new_teacher'].pk)
+
+            # Конфліктні (swap тощо) — видалити всі, потім перестворити
+            if conflicting:
+                new_lessons = []
+                for c in conflicting:
+                    l = c['lesson']
+                    new_lessons.append(Lesson(
+                        schedule_id=l.schedule_id,
+                        school_class_id=l.school_class_id,
+                        subject_id=l.subject_id,
+                        teacher_id=c['new_teacher'].pk,
+                        room_id=l.room_id,
+                        day=l.day,
+                        period=l.period,
+                        week=l.week,
+                        group=l.group,
+                        is_double=l.is_double,
+                    ))
+                Lesson.objects.filter(pk__in=[c['lesson'].pk for c in conflicting]).delete()
+                Lesson.objects.bulk_create(new_lessons)
+
+        messages.success(request, f'Оновлено вчителів у {len(changes)} уроках.')
+        return redirect('scheduler:schedule_view', pk=pk)
+
+    return render(request, 'scheduler/sync_teachers.html', {
+        'schedule': schedule,
+        'changes':  changes,
+    })
+
+
 # ─── Спільні хелпери для публічних вʼюв ─────────────────────────────────────
 
 def _get_active_schedule():
