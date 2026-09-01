@@ -15,19 +15,23 @@
   </a>
 </div>
 
+<style>
+  .sticky-col { position:sticky;left:0;z-index:2;background:#fff;box-shadow:2px 0 4px rgba(0,0,0,.08); }
+  thead .sticky-col { background:#f1f3f5; }
+</style>
 <div class="table-card" style="overflow-x:auto;">
   <table class="table table-bordered table-sm mb-0" style="min-width:480px;">
     <thead>
       <tr class="table-light">
-        <th style="width:36px;">#</th>
-        {% for day in days %}<th>{{ day }}</th>{% endfor %}
+        <th class="sticky-col" style="width:42px;">#</th>
+        {% for day in days %}<th style="min-width:140px;">{{ day }}</th>{% endfor %}
       </tr>
     </thead>
     <tbody>
       {% for p in periods %}
       {% with bp=bell_times|get_item:p %}
       <tr>
-        <td class="text-center text-muted" style="white-space:nowrap;">
+        <td class="sticky-col text-center text-muted" style="white-space:nowrap;">
           <div class="fw-semibold">{{ p|add:1 }}</div>
           {% if bp %}
             <div style="font-size:.7rem;">{{ bp.start_time|time:"H:i" }}</div>
