@@ -85,6 +85,7 @@
             {% if cell.extra.room %}<span class="text-muted ms-1">· <a href="{% url 'scheduler:public_room' cell.extra.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.extra.room }}</a></span>{% endif %}
           </div>
           {% else %}
+          {% if cell.primary.group %}<span class="badge text-bg-secondary" style="font-size:.58rem;">гр.{{ cell.primary.group }}</span>{% endif %}
           <div class="text-muted" style="font-size:.75rem;">
             <a href="{% url 'scheduler:public_teacher' cell.primary.teacher_id %}" class="text-muted text-decoration-none">{{ cell.primary.teacher }}</a>
           </div>
