@@ -88,24 +88,25 @@
         {# ── Звичайний урок ── #}
         <td style="border-left:3px solid {{ cell.primary.subject.color }};background:{{ cell.primary.subject.color }}22;padding:5px 6px;vertical-align:middle;text-align:center;">
           {% if cell.extra %}
-          {# Дві групи #}
-          <div class="fw-semibold lh-sm mb-1" style="font-size:.82rem;">{{ cell.primary.subject.short_name|default:cell.primary.subject.name }}</div>
-          <div style="font-size:.72rem;border-top:1px solid rgba(0,0,0,.08);padding-top:3px;margin-top:1px;">
+          {# Дві групи — предмет окремо для кожної #}
+          <div style="border-top:1px solid rgba(0,0,0,.08);padding-top:3px;">
             <span class="badge text-bg-secondary" style="font-size:.56rem;">гр.{{ cell.primary.group|default:"1" }}</span>
-            <span style="color:#555;">
+            <div class="fw-semibold lh-sm" style="font-size:.82rem;">{{ cell.primary.subject.short_name|default:cell.primary.subject.name }}</div>
+            <div style="font-size:.72rem;color:#555;">
               <a href="{% url 'scheduler:public_teacher' cell.primary.teacher_id %}" class="text-decoration-none" style="color:inherit;">{{ cell.primary.teacher }}</a>
-            </span>
+            </div>
             {% if cell.primary.room %}
             <div style="font-size:.68rem;color:#888;">
               <a href="{% url 'scheduler:public_room' cell.primary.room_id %}" class="text-decoration-none" style="color:inherit;">каб.&nbsp;{{ cell.primary.room }}</a>
             </div>
             {% endif %}
           </div>
-          <div style="font-size:.72rem;border-top:1px solid rgba(0,0,0,.08);padding-top:3px;margin-top:3px;">
+          <div style="border-top:1px solid rgba(0,0,0,.08);padding-top:3px;margin-top:3px;">
             <span class="badge text-bg-secondary" style="font-size:.56rem;">гр.{{ cell.extra.group|default:"2" }}</span>
-            <span style="color:#555;">
+            <div class="fw-semibold lh-sm" style="font-size:.82rem;">{{ cell.extra.subject.short_name|default:cell.extra.subject.name }}</div>
+            <div style="font-size:.72rem;color:#555;">
               <a href="{% url 'scheduler:public_teacher' cell.extra.teacher_id %}" class="text-decoration-none" style="color:inherit;">{{ cell.extra.teacher }}</a>
-            </span>
+            </div>
             {% if cell.extra.room %}
             <div style="font-size:.68rem;color:#888;">
               <a href="{% url 'scheduler:public_room' cell.extra.room_id %}" class="text-decoration-none" style="color:inherit;">каб.&nbsp;{{ cell.extra.room }}</a>
