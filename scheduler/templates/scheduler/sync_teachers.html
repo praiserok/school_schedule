@@ -1,0 +1,65 @@
+{% extends "scheduler/base.html" %}
+{% block title %}Оновити вчителів — {{ schedule.name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <a href="{% url 'scheduler:schedule_view' schedule.pk %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h4 class="mb-0">Оновити вчителів у розкладі</h4>
+  <span class="text-muted small ms-1">{{ schedule.name }}</span>
+</div>
+
+{% if not changes %}
+<div class="alert alert-success">
+  <i class="bi bi-check-circle me-2"></i>
+  Всі вчителі у розкладі відповідають поточним призначенням. Змін немає.
+</div>
+<a href="{% url 'scheduler:schedule_view' schedule.pk %}" class="btn btn-outline-secondary btn-sm">
+  Повернутись до розкладу
+</a>
+
+{% else %}
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle me-2"></i>
+  Знайдено <strong>{{ changes|length }}</strong> урок{{ changes|length|pluralize:",,ів" }}, де вчитель у призначеннях відрізняється від вчителя у розкладі.
+</div>
+
+<div class="table-card mb-3">
+  <table class="table table-sm table-bordered mb-0">
+    <thead class="table-light">
+      <tr>
+        <th>Клас</th>
+        <th>Предмет</th>
+        <th>Група</th>
+        <th>Зараз у розкладі</th>
+        <th></th>
+        <th>Новий вчитель</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in changes %}
+      <tr>
+        <td>{{ c.lesson.school_class }}</td>
+        <td>{{ c.lesson.subject }}</td>
+        <td>{% if c.lesson.group %}гр.{{ c.lesson.group }}{% else %}—{% endif %}</td>
+        <td class="text-danger">{{ c.old_teacher }}</td>
+        <td class="text-center text-muted"><i class="bi bi-arrow-right"></i></td>
+        <td class="text-success fw-semibold">{{ c.new_teacher }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-primary">
+    <i class="bi bi-arrow-repeat me-1"></i>Застосувати зміни ({{ changes|length }})
+  </button>
+  <a href="{% url 'scheduler:schedule_view' schedule.pk %}" class="btn btn-outline-secondary ms-2">
+    Скасувати
+  </a>
+</form>
+{% endif %}
+{% endblock %}
