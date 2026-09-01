@@ -87,6 +87,44 @@
           <div class="text-muted" style="font-size:.7rem;"><a href="{% url 'scheduler:public_room' cell.lessons.0.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.lessons.0.room }}</a></div>
           {% endif %}
         </td>
+        {% elif cell and cell.kind == 'only_a' %}
+        <td style="padding:2px;">
+          {% with la=cell.lessons.0 %}
+          <div class="cell-chip" style="border-left:3px solid {{ la.subject.color }};background:{{ la.subject.color }}22;">
+            <div>
+              <span class="badge text-bg-secondary me-1" style="font-size:.6rem;">А</span>
+              <span class="fw-semibold" style="font-size:.8rem;">{{ la.subject.short_name|default:la.subject.name }}</span>
+            </div>
+            {% for l in cell.lessons %}
+            <div class="text-muted" style="font-size:.72rem;">
+              <a href="{% url 'scheduler:public_class' l.school_class_id %}" class="text-muted text-decoration-none">{{ l.school_class }}</a>{% if l.group %} <span class="badge text-bg-secondary" style="font-size:.58rem;">гр.{{ l.group }}</span>{% endif %}
+            </div>
+            {% endfor %}
+            {% if la.room %}
+            <div class="text-muted" style="font-size:.7rem;"><a href="{% url 'scheduler:public_room' la.room_id %}" class="text-muted text-decoration-none">каб. {{ la.room }}</a></div>
+            {% endif %}
+          </div>
+          {% endwith %}
+        </td>
+        {% elif cell and cell.kind == 'only_b' %}
+        <td style="padding:2px;">
+          {% with lb=cell.lessons.0 %}
+          <div class="cell-chip" style="border-left:3px solid {{ lb.subject.color }};background:{{ lb.subject.color }}22;">
+            <div>
+              <span class="badge text-bg-dark me-1" style="font-size:.6rem;">Б</span>
+              <span class="fw-semibold" style="font-size:.8rem;">{{ lb.subject.short_name|default:lb.subject.name }}</span>
+            </div>
+            {% for l in cell.lessons %}
+            <div class="text-muted" style="font-size:.72rem;">
+              <a href="{% url 'scheduler:public_class' l.school_class_id %}" class="text-muted text-decoration-none">{{ l.school_class }}</a>{% if l.group %} <span class="badge text-bg-secondary" style="font-size:.58rem;">гр.{{ l.group }}</span>{% endif %}
+            </div>
+            {% endfor %}
+            {% if lb.room %}
+            <div class="text-muted" style="font-size:.7rem;"><a href="{% url 'scheduler:public_room' lb.room_id %}" class="text-muted text-decoration-none">каб. {{ lb.room }}</a></div>
+            {% endif %}
+          </div>
+          {% endwith %}
+        </td>
         {% else %}
         <td></td>
         {% endif %}
