@@ -1,3 +1,4 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="uk">
 <head>
@@ -21,8 +22,9 @@
 </head>
 <body>
 <header class="pub-header d-flex align-items-center gap-3 flex-wrap">
-  <a href="{% url 'scheduler:public_home' %}" class="fw-bold fs-6">
-    <i class="bi bi-calendar2-week me-1"></i>Розклад
+  <a href="{% url 'scheduler:public_home' %}" class="d-flex align-items-center gap-2 text-decoration-none">
+    <img src="{% static 'logo_33_transparent.png' %}" alt="Логотип" style="height:36px;width:auto;">
+    <span class="fw-bold fs-6 text-white">Розклад</span>
   </a>
   <div class="ms-auto d-flex align-items-center gap-2 flex-wrap">
     {% if classes %}
