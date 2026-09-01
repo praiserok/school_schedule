@@ -66,6 +66,15 @@ urlpatterns = [
     path('schedules/<int:pk>/unassigned/', views.schedule_unassigned, name='schedule_unassigned'),
     path('schedules/<int:pk>/unassigned-count/', views.schedule_unassigned_count, name='schedule_unassigned_count'),
 
+    # Public (no login required)
+    path('public/', views.public_home, name='public_home'),
+    path('public/class/<int:pk>/', views.public_class, name='public_class'),
+    path('public/class/<int:pk>/export/', views.public_class_export, name='public_class_export'),
+    path('public/teacher/<int:pk>/', views.public_teacher, name='public_teacher'),
+    path('public/teacher/<int:pk>/export/', views.public_teacher_export, name='public_teacher_export'),
+    path('public/room/<int:pk>/', views.public_room, name='public_room'),
+    path('public/room/<int:pk>/export/', views.public_room_export, name='public_room_export'),
+
     # Exports
     path('export/teacher-load/', views.export_teacher_load, name='export_teacher_load'),
     path('export/class-load/', views.export_class_load, name='export_class_load'),

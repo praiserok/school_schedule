@@ -1,0 +1,107 @@
+{% extends "scheduler/public_base.html" %}
+{% load scheduler_tags %}
+{% block title %}{{ school_class }} — Розклад{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <a href="{% url 'scheduler:public_home' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i>
+  </a>
+  <h5 class="mb-0">Клас {{ school_class }}</h5>
+  <span class="text-muted small ms-1">{{ schedule.name }}</span>
+  <a href="{% url 'scheduler:public_class_export' school_class.pk %}"
+     class="btn btn-sm btn-outline-success ms-auto">
+    <i class="bi bi-file-earmark-excel me-1"></i>Excel
+  </a>
+</div>
+
+<div class="table-card" style="overflow-x:auto;">
+  <table class="table table-bordered table-sm mb-0" style="min-width:480px;">
+    <thead>
+      <tr class="table-light">
+        <th style="width:36px;">#</th>
+        {% for day in days %}<th>{{ day }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in periods %}
+      {% with bp=bell_times|get_item:p %}
+      <tr>
+        <td class="text-center text-muted" style="white-space:nowrap;">
+          <div class="fw-semibold">{{ p|add:1 }}</div>
+          {% if bp %}
+            <div style="font-size:.7rem;">{{ bp.start_time|time:"H:i" }}</div>
+            <div style="font-size:.7rem;">{{ bp.end_time|time:"H:i" }}</div>
+          {% endif %}
+        </td>
+        {% for d in schedule.days_per_week|make_range %}
+        {% with cell=grid|get_item:school_class.pk|get_item:d|get_item:p %}
+        {% if cell and cell.kind == 'alt' %}
+        <td style="padding:2px;">
+          {% if cell.week_a %}
+          <div class="cell-chip" style="border-left:3px solid {{ cell.week_a.subject.color }};background:{{ cell.week_a.subject.color }}22;">
+            <div>
+              <span class="badge text-bg-secondary me-1" style="font-size:.6rem;">А</span>
+              <span class="fw-semibold">{{ cell.week_a.subject.short_name|default:cell.week_a.subject.name }}</span>
+              {% if cell.week_a.group %}<span class="badge text-bg-secondary ms-1" style="font-size:.58rem;">гр.{{ cell.week_a.group }}</span>{% endif %}
+            </div>
+            <div class="text-muted" style="font-size:.72rem;">
+              <a href="{% url 'scheduler:public_teacher' cell.week_a.teacher_id %}" class="text-muted text-decoration-none">{{ cell.week_a.teacher }}</a>
+            </div>
+            {% if cell.week_a.room %}
+            <div class="text-muted" style="font-size:.7rem;"><a href="{% url 'scheduler:public_room' cell.week_a.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.week_a.room }}</a></div>
+            {% endif %}
+          </div>
+          {% endif %}
+          {% if cell.week_b %}
+          <div class="cell-chip" style="border-left:3px solid {{ cell.week_b.subject.color }};background:{{ cell.week_b.subject.color }}22;">
+            <div>
+              <span class="badge text-bg-dark me-1" style="font-size:.6rem;">Б</span>
+              <span class="fw-semibold">{{ cell.week_b.subject.short_name|default:cell.week_b.subject.name }}</span>
+              {% if cell.week_b.group %}<span class="badge text-bg-secondary ms-1" style="font-size:.58rem;">гр.{{ cell.week_b.group }}</span>{% endif %}
+            </div>
+            <div class="text-muted" style="font-size:.72rem;">
+              <a href="{% url 'scheduler:public_teacher' cell.week_b.teacher_id %}" class="text-muted text-decoration-none">{{ cell.week_b.teacher }}</a>
+            </div>
+            {% if cell.week_b.room %}
+            <div class="text-muted" style="font-size:.7rem;"><a href="{% url 'scheduler:public_room' cell.week_b.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.week_b.room }}</a></div>
+            {% endif %}
+          </div>
+          {% endif %}
+        </td>
+        {% elif cell and cell.kind == 'regular' %}
+        <td style="border-left:3px solid {{ cell.primary.subject.color }};background:{{ cell.primary.subject.color }}22;padding:4px 5px;">
+          <div class="fw-semibold" style="font-size:.82rem;">{{ cell.primary.subject.short_name|default:cell.primary.subject.name }}</div>
+          {% if cell.extra %}
+          {# Дві групи — показуємо кожну окремо #}
+          <div style="font-size:.72rem;margin-top:1px;">
+            <span class="badge text-bg-secondary" style="font-size:.58rem;">гр.{{ cell.primary.group|default:"1" }}</span>
+            <a href="{% url 'scheduler:public_teacher' cell.primary.teacher_id %}" class="text-muted text-decoration-none ms-1">{{ cell.primary.teacher }}</a>
+            {% if cell.primary.room %}<span class="text-muted ms-1">· <a href="{% url 'scheduler:public_room' cell.primary.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.primary.room }}</a></span>{% endif %}
+          </div>
+          <div style="font-size:.72rem;margin-top:1px;">
+            <span class="badge text-bg-secondary" style="font-size:.58rem;">гр.{{ cell.extra.group|default:"2" }}</span>
+            <a href="{% url 'scheduler:public_teacher' cell.extra.teacher_id %}" class="text-muted text-decoration-none ms-1">{{ cell.extra.teacher }}</a>
+            {% if cell.extra.room %}<span class="text-muted ms-1">· <a href="{% url 'scheduler:public_room' cell.extra.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.extra.room }}</a></span>{% endif %}
+          </div>
+          {% else %}
+          <div class="text-muted" style="font-size:.75rem;">
+            <a href="{% url 'scheduler:public_teacher' cell.primary.teacher_id %}" class="text-muted text-decoration-none">{{ cell.primary.teacher }}</a>
+          </div>
+          {% if cell.primary.room %}
+          <div class="text-muted" style="font-size:.7rem;"><a href="{% url 'scheduler:public_room' cell.primary.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.primary.room }}</a></div>
+          {% endif %}
+          {% endif %}
+        </td>
+        {% else %}
+        <td></td>
+        {% endif %}
+        {% endwith %}
+        {% endfor %}
+      </tr>
+      {% endwith %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

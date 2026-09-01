@@ -1,0 +1,83 @@
+{% extends "scheduler/public_base.html" %}
+{% block title %}Розклад занять{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-md-8 col-lg-6">
+
+    {% if not schedule %}
+    <div class="alert alert-warning text-center">
+      <i class="bi bi-calendar-x fs-3 d-block mb-2"></i>
+      Активний розклад не знайдено.
+    </div>
+    {% else %}
+
+    <div class="text-center mb-4">
+      <i class="bi bi-calendar2-week text-primary" style="font-size:3rem;"></i>
+      <h4 class="mt-2 mb-1">{{ schedule.name }}</h4>
+      <div class="text-muted small">Оберіть клас або вчителя щоб переглянути розклад</div>
+    </div>
+
+    <div class="row g-3">
+      <div class="col-12 col-sm-6 col-lg-4">
+        <div class="card h-100">
+          <div class="card-header fw-semibold">
+            <i class="bi bi-people me-2 text-primary"></i>Класи
+          </div>
+          <div class="list-group list-group-flush" style="max-height:400px;overflow-y:auto;">
+            {% for cls in classes %}
+            <a href="{% url 'scheduler:public_class' cls.pk %}"
+               class="list-group-item list-group-item-action d-flex align-items-center">
+              <span class="fw-semibold me-auto">{{ cls }}</span>
+              <i class="bi bi-chevron-right text-muted"></i>
+            </a>
+            {% empty %}
+            <div class="p-3 text-muted small">Немає класів</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-sm-6 col-lg-4">
+        <div class="card h-100">
+          <div class="card-header fw-semibold">
+            <i class="bi bi-person-badge me-2 text-success"></i>Вчителі
+          </div>
+          <div class="list-group list-group-flush" style="max-height:400px;overflow-y:auto;">
+            {% for t in teachers %}
+            <a href="{% url 'scheduler:public_teacher' t.pk %}"
+               class="list-group-item list-group-item-action d-flex align-items-center">
+              <span class="me-auto">{{ t }}</span>
+              <i class="bi bi-chevron-right text-muted"></i>
+            </a>
+            {% empty %}
+            <div class="p-3 text-muted small">Немає вчителів</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-sm-6 col-lg-4">
+        <div class="card h-100">
+          <div class="card-header fw-semibold">
+            <i class="bi bi-door-open me-2 text-warning"></i>Кабінети
+          </div>
+          <div class="list-group list-group-flush" style="max-height:400px;overflow-y:auto;">
+            {% for r in rooms %}
+            <a href="{% url 'scheduler:public_room' r.pk %}"
+               class="list-group-item list-group-item-action d-flex align-items-center">
+              <span class="me-auto">{{ r.name }}</span>
+              <i class="bi bi-chevron-right text-muted"></i>
+            </a>
+            {% empty %}
+            <div class="p-3 text-muted small">Немає кабінетів</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

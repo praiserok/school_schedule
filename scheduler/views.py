@@ -1060,7 +1060,9 @@ def schedule_unassigned_count(request, pk):
 def room_schedule(request, schedule_pk, room_pk):
     schedule = get_object_or_404(Schedule, pk=schedule_pk)
     room = get_object_or_404(Room, pk=room_pk)
-    lessons = schedule.lessons.filter(room=room).select_related('school_class', 'subject', 'teacher')
+    lessons = (schedule.lessons.filter(room=room)
+               .select_related('school_class', 'subject', 'teacher')
+               .order_by('day', 'period', 'school_class__grade', 'school_class__letter', 'group', 'week'))
     days = DAYS_FULL[:schedule.days_per_week]
     D = schedule.days_per_week
     P = schedule.lessons_per_day
@@ -1083,11 +1085,11 @@ def room_schedule(request, schedule_pk, room_pk):
             cell = raw.get((d, p), [])
             if not cell:
                 continue
-            by_class: dict = defaultdict(list)
+            by_group: dict = defaultdict(list)
             for l in cell:
-                by_class[l.school_class_id].append(l)
+                by_group[(l.school_class_id, l.group)].append(l)
             entries = []
-            for ls in by_class.values():
+            for ls in by_group.values():
                 week_a = next((l for l in ls if l.week == 0), None)
                 week_b = next((l for l in ls if l.week == 1), None)
                 if week_a and week_b and week_a.subject_id == week_b.subject_id:
@@ -1271,6 +1273,459 @@ def schedule_view(request, pk):
         'all_teachers': Teacher.objects.all(),
         'bell_times': bell_times,
     })
+
+
+# ─── Спільні хелпери для публічних вʼюв ─────────────────────────────────────
+
+def _get_active_schedule():
+    """Повертає активний розклад або кидає Http404. Безпечно при >1 активному."""
+    from django.http import Http404
+    schedule = Schedule.objects.filter(is_active=True).order_by('-pk').first()
+    if not schedule:
+        raise Http404
+    return schedule
+
+
+def _get_bell_times(schedule):
+    """Повертає {period_index: BellPeriod} для розкладу дзвінків."""
+    if not schedule.bell_schedule_id:
+        return {}
+    return {bp.number - 1: bp
+            for bp in BellPeriod.objects.filter(bell_schedule_id=schedule.bell_schedule_id)}
+
+
+def _build_teacher_grid(lessons, D, P):
+    """
+    grid[d][p] → None | {'kind': 'regular'|'alt'|'only_a'|'only_b', 'lessons': [...]}
+    або {'kind': 'alt', 'week_a': [...], 'week_b': [...]}.
+    Вважає 'regular' тільки якщо той самий клас і предмет в обидва тижні.
+    """
+    raw = {d: {p: [] for p in range(P)} for d in range(D)}
+    for l in lessons:
+        if l.day < D and l.period < P:
+            raw[l.day][l.period].append(l)
+    grid = {}
+    for d in range(D):
+        grid[d] = {}
+        for p in range(P):
+            cell = raw[d][p]
+            if not cell:
+                grid[d][p] = None
+                continue
+            week_a = [l for l in cell if l.week == 0]
+            week_b = [l for l in cell if l.week == 1]
+            subj_a = {l.subject_id for l in week_a}
+            subj_b = {l.subject_id for l in week_b}
+            same_class = (week_a and week_b
+                          and week_a[0].school_class_id == week_b[0].school_class_id)
+            if week_a and week_b and subj_a == subj_b and same_class:
+                grid[d][p] = {'kind': 'regular', 'lessons': week_a}
+            elif week_a and week_b:
+                grid[d][p] = {'kind': 'alt', 'week_a': week_a, 'week_b': week_b}
+            elif week_a:
+                grid[d][p] = {'kind': 'only_a', 'lessons': week_a}
+            else:
+                grid[d][p] = {'kind': 'only_b', 'lessons': week_b}
+    return grid
+
+
+def _build_room_entries_grid(lessons, D, P):
+    """
+    grid[d][p] → list of entry dicts (може бути декілька класів в одному кабінеті).
+    entry: {'kind': 'regular'|'alt'|'week_a'|'week_b', 'lesson': l}
+           або {'kind': 'alt', 'week_a': l, 'week_b': l}
+    """
+    raw: dict = defaultdict(list)
+    for l in lessons:
+        if l.day < D and l.period < P:
+            raw[l.day, l.period].append(l)
+    grid = {d: {p: [] for p in range(P)} for d in range(D)}
+    for d in range(D):
+        for p in range(P):
+            cell = raw.get((d, p), [])
+            if not cell:
+                continue
+            by_group: dict = defaultdict(list)
+            for l in cell:
+                by_group[(l.school_class_id, l.group)].append(l)
+            entries = []
+            for ls in by_group.values():
+                week_a = next((l for l in ls if l.week == 0), None)
+                week_b = next((l for l in ls if l.week == 1), None)
+                if week_a and week_b and week_a.subject_id == week_b.subject_id:
+                    entries.append({'kind': 'regular', 'lesson': week_a})
+                elif week_a and week_b:
+                    entries.append({'kind': 'alt', 'week_a': week_a, 'week_b': week_b})
+                elif week_a:
+                    entries.append({'kind': 'week_a', 'lesson': week_a})
+                else:
+                    entries.append({'kind': 'week_b', 'lesson': week_b})
+            grid[d][p] = entries
+    return grid
+
+
+# ─── Публічний перегляд (без логіну) ────────────────────────────────────────
+
+def public_home(request):
+    """Головна публічна сторінка: вибір класу або вчителя."""
+    schedule = Schedule.objects.filter(is_active=True).first()
+    if not schedule:
+        return render(request, 'scheduler/public_home.html', {'schedule': None})
+    classes  = SchoolClass.objects.order_by('grade', 'letter')
+    teachers = Teacher.objects.order_by('last_name', 'first_name')
+    rooms    = Room.objects.order_by('name')
+    return render(request, 'scheduler/public_home.html', {
+        'schedule': schedule,
+        'classes':  classes,
+        'teachers': teachers,
+        'rooms':    rooms,
+    })
+
+
+def public_class(request, pk):
+    """Публічний розклад класу (тільки активний розклад)."""
+    schedule     = _get_active_schedule()
+    school_class = get_object_or_404(SchoolClass, pk=pk)
+    D, P = schedule.days_per_week, schedule.lessons_per_day
+
+    lessons = (schedule.lessons
+               .filter(school_class=school_class)
+               .select_related('subject', 'teacher', 'room')
+               .order_by('week', 'group'))
+
+    return render(request, 'scheduler/public_class.html', {
+        'schedule':     schedule,
+        'school_class': school_class,
+        'grid':         _build_display_grid(lessons, [school_class], D, P),
+        'days':         DAYS_FULL[:D],
+        'periods':      range(P),
+        'bell_times':   _get_bell_times(schedule),
+        'classes':      SchoolClass.objects.order_by('grade', 'letter'),
+        'teachers':     Teacher.objects.order_by('last_name', 'first_name'),
+        'rooms':        Room.objects.only('pk', 'name').order_by('name'),
+    })
+
+
+def public_teacher(request, pk):
+    """Публічний розклад вчителя (тільки активний розклад)."""
+    schedule = _get_active_schedule()
+    teacher  = get_object_or_404(Teacher, pk=pk)
+    D, P = schedule.days_per_week, schedule.lessons_per_day
+
+    lessons = (schedule.lessons
+               .filter(teacher=teacher)
+               .select_related('school_class', 'subject', 'room')
+               .order_by('day', 'period', 'week'))
+
+    return render(request, 'scheduler/public_teacher.html', {
+        'schedule':   schedule,
+        'teacher':    teacher,
+        'grid':       _build_teacher_grid(lessons, D, P),
+        'days':       DAYS_FULL[:D],
+        'periods':    range(P),
+        'bell_times': _get_bell_times(schedule),
+        'classes':    SchoolClass.objects.order_by('grade', 'letter'),
+        'teachers':   Teacher.objects.order_by('last_name', 'first_name'),
+        'rooms':      Room.objects.only('pk', 'name').order_by('name'),
+    })
+
+
+def public_room(request, pk):
+    """Публічний розклад кабінету (тільки активний розклад)."""
+    schedule = _get_active_schedule()
+    room     = get_object_or_404(Room, pk=pk)
+    D, P = schedule.days_per_week, schedule.lessons_per_day
+
+    lessons = (schedule.lessons.filter(room=room)
+               .select_related('school_class', 'subject', 'teacher')
+               .order_by('day', 'period', 'school_class__grade', 'school_class__letter', 'group', 'week'))
+
+    return render(request, 'scheduler/public_room.html', {
+        'schedule':   schedule,
+        'room':       room,
+        'grid':       _build_room_entries_grid(lessons, D, P),
+        'days':       DAYS_FULL[:D],
+        'periods':    range(P),
+        'bell_times': _get_bell_times(schedule),
+        'classes':    SchoolClass.objects.order_by('grade', 'letter'),
+        'teachers':   Teacher.objects.order_by('last_name', 'first_name'),
+        'rooms':      Room.objects.only('pk', 'name').order_by('name'),
+    })
+
+
+# ─── Public XLSX exports (без логіну) ────────────────────────────────────────
+
+def _pub_xlsx_response(title, D, P, days_full, bell_times, get_cell, filename):
+    """
+    Будує XLSX-файл і повертає HttpResponse.
+    get_cell(d, p) → (text: str, color_hex: str|None)
+      text — багаторядковий рядок (\\n як роздільник)
+      color_hex — HEX колір предмету (#rrggbb) або None
+    """
+    import io
+    from django.http import HttpResponse
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    C_NAVY    = '1B3A6B'
+    C_BLUE    = '2C5F8A'
+    C_LT_BLUE = 'D6E4F0'
+    C_GRAY    = 'F0F0F0'
+    C_WHITE   = 'FFFFFF'
+
+    thin    = Side(style='thin', color='BFBFBF')
+    brd     = Border(left=thin, right=thin, top=thin, bottom=thin)
+    brd_hdr = Border(left=thin, right=thin, top=thin,
+                     bottom=Side(style='medium', color=C_NAVY))
+
+    f_title  = Font(name='Calibri', bold=True, size=14, color=C_WHITE)
+    f_day    = Font(name='Calibri', bold=True, size=11, color=C_WHITE)
+    f_period = Font(name='Calibri', bold=True, size=10, color=C_NAVY)
+    f_cell   = Font(name='Calibri', size=10)
+
+    fill_navy  = PatternFill('solid', fgColor=C_NAVY)
+    fill_blue  = PatternFill('solid', fgColor=C_BLUE)
+    fill_lblue = PatternFill('solid', fgColor=C_LT_BLUE)
+    fill_gray  = PatternFill('solid', fgColor=C_GRAY)
+
+    al_c = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    al_l = Alignment(horizontal='left',   vertical='center', wrap_text=True)
+
+    def _subject_fill(hex_color, alpha=0.22):
+        try:
+            h = (hex_color or '').lstrip('#')
+            if len(h) != 6:
+                return PatternFill('solid', fgColor=C_WHITE)
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            r2 = round(r * alpha + 255 * (1 - alpha))
+            g2 = round(g * alpha + 255 * (1 - alpha))
+            b2 = round(b * alpha + 255 * (1 - alpha))
+            return PatternFill('solid', fgColor=f'{r2:02X}{g2:02X}{b2:02X}')
+        except Exception:
+            return PatternFill('solid', fgColor=C_WHITE)
+
+    LINE_H  = 18
+    ROW_MIN = 52
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = title[:31]
+
+    ws.column_dimensions['A'].width = 13
+    for i in range(D):
+        ws.column_dimensions[get_column_letter(i + 2)].width = 30
+
+    # Рядок 1 — заголовок
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=D + 1)
+    c = ws.cell(row=1, column=1, value=title)
+    c.font = f_title; c.fill = fill_navy; c.alignment = al_c
+    ws.row_dimensions[1].height = 26
+
+    # Рядок 2 — дні тижня
+    hdr = ws.cell(row=2, column=1, value='Урок')
+    hdr.font = f_day; hdr.fill = fill_blue; hdr.alignment = al_c; hdr.border = brd_hdr
+    for i, day in enumerate(days_full):
+        c = ws.cell(row=2, column=i + 2, value=day)
+        c.font = f_day; c.fill = fill_blue; c.alignment = al_c; c.border = brd_hdr
+    ws.row_dimensions[2].height = 18
+
+    # Рядки 3+ — уроки
+    for p in range(P):
+        row = p + 3
+        bp = bell_times.get(p)
+        period_val = (f'{p + 1}\n{bp.start_time.strftime("%H:%M")}–{bp.end_time.strftime("%H:%M")}'
+                      if bp else str(p + 1))
+        pc = ws.cell(row=row, column=1, value=period_val)
+        pc.font = f_period; pc.fill = fill_lblue; pc.alignment = al_c; pc.border = brd
+
+        max_lines = 1
+        for d in range(D):
+            text, color = get_cell(d, p)
+            c = ws.cell(row=row, column=d + 2)
+            c.border = brd; c.font = f_cell
+            if text:
+                c.value = text
+                c.alignment = al_l
+                c.fill = _subject_fill(color) if color else PatternFill('solid', fgColor=C_WHITE)
+                max_lines = max(max_lines, text.count('\n') + 1)
+            else:
+                c.fill = fill_gray
+                c.alignment = al_c
+
+        ws.row_dimensions[row].height = max(max_lines * LINE_H, ROW_MIN)
+
+    ws.freeze_panes = 'B3'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    resp = HttpResponse(
+        buf,
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    resp['Content-Disposition'] = f'attachment; filename="{filename}.xlsx"'
+    return resp
+
+
+def public_class_export(request, pk):
+    """XLSX розклад класу (публічний)."""
+    schedule     = _get_active_schedule()
+    school_class = get_object_or_404(SchoolClass, pk=pk)
+    D, P = schedule.days_per_week, schedule.lessons_per_day
+
+    lessons = (schedule.lessons.filter(school_class=school_class)
+               .select_related('subject', 'teacher', 'room')
+               .order_by('week', 'group'))
+    grid = _build_display_grid(lessons, [school_class], D, P)[school_class.pk]
+    bell_times = _get_bell_times(schedule)
+
+    def _lesson_line(l):
+        room = f' · каб. {l.room}' if l.room else ''
+        return f'{l.teacher}{room}'
+
+    def get_cell(d, p):
+        cell = grid[d][p]
+        if cell is None:
+            return '', None
+        if cell['kind'] == 'regular':
+            l = cell['primary']
+            subj = l.subject.short_name or l.subject.name
+            lines = [subj]
+            if cell['extra']:
+                ex = cell['extra']
+                g1 = l.group or '1'
+                g2 = ex.group or '2'
+                lines.append(f'гр.{g1}: {_lesson_line(l)}')
+                lines.append(f'гр.{g2}: {_lesson_line(ex)}')
+            else:
+                lines.append(_lesson_line(l))
+            return '\n'.join(lines), l.subject.color
+        # alt
+        parts = []
+        if cell['week_a']:
+            la = cell['week_a']
+            sa = la.subject.short_name or la.subject.name
+            grp = f' гр.{la.group}' if la.group else ''
+            parts.append(f'А: {sa}{grp}\n{_lesson_line(la)}')
+        if cell['week_b']:
+            lb = cell['week_b']
+            sb = lb.subject.short_name or lb.subject.name
+            grp = f' гр.{lb.group}' if lb.group else ''
+            parts.append(f'Б: {sb}{grp}\n{_lesson_line(lb)}')
+        color = (cell['week_a'] or cell['week_b']).subject.color
+        return '\n'.join(parts), color
+
+    safe = str(school_class).replace(' ', '_')
+    return _pub_xlsx_response(
+        title=f'Розклад {school_class}  ·  {schedule.name}',
+        D=D, P=P, days_full=DAYS_FULL[:D], bell_times=bell_times,
+        get_cell=get_cell, filename=f'schedule_class_{safe}',
+    )
+
+
+def public_teacher_export(request, pk):
+    """XLSX розклад вчителя (публічний)."""
+    schedule = _get_active_schedule()
+    teacher  = get_object_or_404(Teacher, pk=pk)
+    D, P = schedule.days_per_week, schedule.lessons_per_day
+
+    lessons = (schedule.lessons.filter(teacher=teacher)
+               .select_related('school_class', 'subject', 'room')
+               .order_by('day', 'period', 'week'))
+
+    grid = _build_teacher_grid(lessons, D, P)
+    bell_times = _get_bell_times(schedule)
+
+    def _cls_str(l):
+        return str(l.school_class) + (f' гр.{l.group}' if l.group else '')
+
+    def get_cell(d, p):
+        cell = grid[d][p]
+        if cell is None:
+            return '', None
+        if cell['kind'] in ('regular', 'only_a', 'only_b'):
+            ls = cell['lessons']
+            l0 = ls[0]
+            subj = l0.subject.short_name or l0.subject.name
+            classes = ', '.join(_cls_str(l) for l in ls)
+            lines = [subj, classes]
+            if l0.room:
+                lines.append(f'каб. {l0.room}')
+            return '\n'.join(lines), l0.subject.color
+        # alt
+        parts = []
+        if cell['week_a']:
+            la = cell['week_a'][0]
+            sa = la.subject.short_name or la.subject.name
+            classes_a = ', '.join(_cls_str(l) for l in cell['week_a'])
+            parts.append(f'А: {sa}\n{classes_a}' + (f'\nкаб. {la.room}' if la.room else ''))
+        if cell['week_b']:
+            lb = cell['week_b'][0]
+            sb = lb.subject.short_name or lb.subject.name
+            classes_b = ', '.join(_cls_str(l) for l in cell['week_b'])
+            parts.append(f'Б: {sb}\n{classes_b}' + (f'\nкаб. {lb.room}' if lb.room else ''))
+        color = (cell['week_a'][0] if cell['week_a'] else cell['week_b'][0]).subject.color
+        return '\n'.join(parts), color
+
+    safe = str(teacher).replace(' ', '_')[:30]
+    return _pub_xlsx_response(
+        title=f'{teacher}  ·  {schedule.name}',
+        D=D, P=P, days_full=DAYS_FULL[:D], bell_times=bell_times,
+        get_cell=get_cell, filename=f'schedule_teacher_{safe}',
+    )
+
+
+def public_room_export(request, pk):
+    """XLSX навантаженість кабінету (публічний)."""
+    schedule = _get_active_schedule()
+    room     = get_object_or_404(Room, pk=pk)
+    D, P = schedule.days_per_week, schedule.lessons_per_day
+
+    lessons = (schedule.lessons.filter(room=room)
+               .select_related('school_class', 'subject', 'teacher')
+               .order_by('day', 'period', 'school_class__grade', 'school_class__letter', 'group', 'week'))
+
+    grid = _build_room_entries_grid(lessons, D, P)
+    bell_times = _get_bell_times(schedule)
+
+    def get_cell(d, p):
+        entries = grid[d][p]
+        if not entries:
+            return '', None
+        lines = []
+        first_color = None
+        for i, entry in enumerate(entries):
+            if i > 0:
+                lines.append('─────')
+            if entry['kind'] in ('regular', 'week_a', 'week_b'):
+                l = entry['lesson']
+                subj = l.subject.short_name or l.subject.name
+                grp = f' гр.{l.group}' if l.group else ''
+                prefix = {'week_a': 'А: ', 'week_b': 'Б: '}.get(entry['kind'], '')
+                lines += [f'{prefix}{subj}', f'{l.school_class}{grp}', str(l.teacher)]
+                if first_color is None:
+                    first_color = l.subject.color
+            else:  # alt
+                la, lb = entry.get('week_a'), entry.get('week_b')
+                if la:
+                    sa = la.subject.short_name or la.subject.name
+                    grp = f' гр.{la.group}' if la.group else ''
+                    lines += [f'А: {sa}', f'{la.school_class}{grp}', str(la.teacher)]
+                    if first_color is None:
+                        first_color = la.subject.color
+                if lb:
+                    sb = lb.subject.short_name or lb.subject.name
+                    grp = f' гр.{lb.group}' if lb.group else ''
+                    lines += [f'Б: {sb}', f'{lb.school_class}{grp}', str(lb.teacher)]
+        return '\n'.join(lines), first_color
+
+    safe = room.name.replace(' ', '_')[:30]
+    return _pub_xlsx_response(
+        title=f'Кабінет {room.name}  ·  {schedule.name}',
+        D=D, P=P, days_full=DAYS_FULL[:D], bell_times=bell_times,
+        get_cell=get_cell, filename=f'schedule_room_{safe}',
+    )
 
 
 # ─── Exports ─────────────────────────────────────────────────────────────────

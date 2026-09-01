@@ -221,9 +221,10 @@
             {% if cell.week_a %}
             <div class="sch-alt-lesson" data-lid="{{ cell.week_a.pk }}"
                  style="border-left:3px solid {{ cell.week_a.subject.color }};background:{{ cell.week_a.subject.color }}22;padding:3px 5px;margin-bottom:2px;border-radius:3px;">
-              <div class="d-flex align-items-center gap-1">
+              <div class="d-flex align-items-center gap-1 flex-wrap">
                 <span class="badge text-bg-secondary" style="font-size:.6rem;">А</span>
                 <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_a.subject.short_name|default:cell.week_a.subject.name }}</span>
+                {% if cell.week_a.group %}<span class="badge text-bg-secondary" style="font-size:.58rem;">гр.{{ cell.week_a.group }}</span>{% endif %}
                 <button class="btn-toggle-week d-none ms-auto" data-lid="{{ cell.week_a.pk }}"
                         style="border:none;background:none;padding:0 2px;line-height:1;color:#6f42c1;font-size:.72rem;"
                         title="Змінити тиждень (А↔Б)" onclick="event.stopPropagation();">
@@ -246,9 +247,10 @@
             {% if cell.week_b %}
             <div class="sch-alt-lesson" data-lid="{{ cell.week_b.pk }}"
                  style="border-left:3px solid {{ cell.week_b.subject.color }};background:{{ cell.week_b.subject.color }}22;padding:3px 5px;border-radius:3px;">
-              <div class="d-flex align-items-center gap-1">
+              <div class="d-flex align-items-center gap-1 flex-wrap">
                 <span class="badge text-bg-dark" style="font-size:.6rem;">Б</span>
                 <span class="fw-semibold" style="font-size:.8rem;">{{ cell.week_b.subject.short_name|default:cell.week_b.subject.name }}</span>
+                {% if cell.week_b.group %}<span class="badge text-bg-secondary" style="font-size:.58rem;">гр.{{ cell.week_b.group }}</span>{% endif %}
                 <button class="btn-toggle-week d-none ms-auto" data-lid="{{ cell.week_b.pk }}"
                         style="border:none;background:none;padding:0 2px;line-height:1;color:#6f42c1;font-size:.72rem;"
                         title="Змінити тиждень (А↔Б)" onclick="event.stopPropagation();">

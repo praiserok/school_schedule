@@ -85,9 +85,11 @@
                 <i class="bi bi-pencil"></i>
               </button>
             </div>
-            <div class="text-muted" style="font-size:.72rem;">{{ cell.week_a.school_class }}</div>
+            <div class="text-muted" style="font-size:.72rem;">
+              {{ cell.week_a.school_class }}{% if cell.week_a.group %} <span class="badge text-bg-secondary" style="font-size:.58rem;">гр.{{ cell.week_a.group }}</span>{% endif %}
+            </div>
             {% if cell.week_a.room %}
-              <div class="room-label text-muted" style="font-size:.7rem;">каб. {{ cell.week_a.room }}</div>
+              <div class="room-label text-muted" style="font-size:.7rem;"><a href="{% url 'scheduler:room_schedule' schedule.pk cell.week_a.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.week_a.room }}</a></div>
             {% else %}
               <div class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;">
                 <i class="bi bi-exclamation-triangle-fill"></i> без кабінету
@@ -106,9 +108,11 @@
                 <i class="bi bi-pencil"></i>
               </button>
             </div>
-            <div class="text-muted" style="font-size:.72rem;">{{ cell.week_b.school_class }}</div>
+            <div class="text-muted" style="font-size:.72rem;">
+              {{ cell.week_b.school_class }}{% if cell.week_b.group %} <span class="badge text-bg-secondary" style="font-size:.58rem;">гр.{{ cell.week_b.group }}</span>{% endif %}
+            </div>
             {% if cell.week_b.room %}
-              <div class="room-label text-muted" style="font-size:.7rem;">каб. {{ cell.week_b.room }}</div>
+              <div class="room-label text-muted" style="font-size:.7rem;"><a href="{% url 'scheduler:room_schedule' schedule.pk cell.week_b.room_id %}" class="text-muted text-decoration-none">каб. {{ cell.week_b.room }}</a></div>
             {% else %}
               <div class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;">
                 <i class="bi bi-exclamation-triangle-fill"></i> без кабінету
@@ -133,7 +137,7 @@
             {% endif %}
             <div class="d-flex align-items-center gap-1 mt-1">
               {% if lesson.room %}
-                <span class="room-label text-muted" style="font-size:.72rem;">каб. {{ lesson.room }}</span>
+                <span class="room-label text-muted" style="font-size:.72rem;"><a href="{% url 'scheduler:room_schedule' schedule.pk lesson.room_id %}" class="text-muted text-decoration-none">каб. {{ lesson.room }}</a></span>
               {% else %}
                 <span class="room-label" style="font-size:.7rem;color:#dc3545;font-weight:600;">
                   <i class="bi bi-exclamation-triangle-fill"></i> без кабінету
